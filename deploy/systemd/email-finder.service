@@ -1,0 +1,22 @@
+[Unit]
+Description=Email Finder API
+After=network.target
+
+[Service]
+Type=simple
+User=emailfinder
+Group=emailfinder
+WorkingDirectory=/opt/email-finder
+EnvironmentFile=/opt/email-finder/.env
+ExecStart=/opt/email-finder/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
