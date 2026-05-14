@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Email Finder — Test UI</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, sans-serif;
+      background: #f4f6f9;
+      color: #1a1a2e;
+      min-height: 100vh;
+      padding: 2rem 1rem;
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin-bottom: 0.25rem;
+    }
+
+    .subtitle {
+      color: #666;
+      font-size: 0.9rem;
+      margin-bottom: 2rem;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+      padding: 1.5rem;
+      max-width: 680px;
+      margin: 0 auto 1.5rem;
+    }
+
+    .card h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid #eee;
+    }
+
+    .field {
+      margin-bottom: 0.9rem;
+    }
+
+    label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #444;
+      margin-bottom: 0.3rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    input[type="text"], input[type="password"] {
+      width: 100%;
+      padding: 0.55rem 0.75rem;
+      border: 1px solid #d1d5db;
+      border-radius: 6px;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input:focus { border-color: #6366f1; }
+
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.25rem;
+    }
+
+    .checkbox-row input { width: auto; }
+    .checkbox-row label {
+      text-transform: none;
+      letter-spacing: 0;
+      font-size: 0.875rem;
+      font-weight: 400;
+      color: #333;
+      margin: 0;
+    }
+
+    button {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.6rem 1.25rem;
+      background: #6366f1;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+      margin-top: 0.5rem;
+    }
+
+    button:hover { background: #4f46e5; }
+    button:disabled { background: #a5b4fc; cursor: not-allowed; }
+
+    .btn-secondary {
+      background: #f3f4f6;
+      color: #374151;
+    }
+    .btn-secondary:hover { background: #e5e7eb; }
+
+    .batch-contacts { margin-bottom: 0.75rem; }
+
+    .contact-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr auto;
+      gap: 0.5rem;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+
+    .contact-row input { margin: 0; }
+
+    .remove-btn {
+      background: none;
+      color: #ef4444;
+      border: 1px solid #fca5a5;
+      padding: 0.4rem 0.6rem;
+      font-size: 0.8rem;
+      border-radius: 5px;
+      margin: 0;
+    }
+    .remove-btn:hover { background: #fee2e2; }
+
+    .result {
+      margin-top: 1rem;
+    }
+
+    .result-badge {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.75rem;
+    }
+
+    .badge-verified   { background: #d1fae5; color: #065f46; }
+    .badge-catch_all  { background: #fef3c7; color: #92400e; }
+    .badge-not_found  { background: #fee2e2; color: #991b1b; }
+    .badge-error      { background: #fee2e2; color: #991b1b; }
+
+    pre {
+      background: #1e1e2e;
+      color: #cdd6f4;
+      padding: 1rem;
+      border-radius: 7px;
+      font-size: 0.8rem;
+      line-height: 1.5;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .error-msg {
+      background: #fee2e2;
+      color: #991b1b;
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      font-size: 0.875rem;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.4);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .batch-result-item {
+      border: 1px solid #e5e7eb;
+      border-radius: 7px;
+      padding: 0.75rem 1rem;
+      margin-bottom: 0.6rem;
+    }
+
+    .batch-result-item .contact-label {
+      font-size: 0.8rem;
+      color: #666;
+      margin-bottom: 0.3rem;
+    }
+
+    .batch-result-item .email-found {
+      font-weight: 700;
+      font-size: 1rem;
+    }
+  </style>
+</head>
+<body>
+
+  <div style="max-width:680px;margin:0 auto">
+    <h1>Email Finder</h1>
+    <p class="subtitle">SMTP-based email verifier — test UI</p>
+
+    <!-- Config card -->
+    <div class="card">
+      <h2>Connection</h2>
+      <div class="field">
+        <label>API Base URL</label>
+        <input type="text" id="baseUrl" value="http://localhost:8000" />
+      </div>
+      <div class="field">
+        <label>API Key</label>
+        <input type="password" id="apiKey" placeholder="your X-API-Key value" />
+      </div>
+    </div>
+
+    <!-- Single lookup -->
+    <div class="card">
+      <h2>Single lookup</h2>
+      <div class="row">
+        <div class="field">
+          <label>First name</label>
+          <input type="text" id="firstName" placeholder="Jamie" />
+        </div>
+        <div class="field">
+          <label>Last name</label>
+          <input type="text" id="lastName" placeholder="Lee" />
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>Domain</label>
+          <input type="text" id="domain" placeholder="notion.so" />
+        </div>
+        <div class="field">
+          <label>Middle name <span style="font-weight:400;text-transform:none">(optional)</span></label>
+          <input type="text" id="middleName" placeholder="" />
+        </div>
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="returnAttempts" />
+        <label for="returnAttempts">Return all SMTP attempts (debug mode)</label>
+      </div>
+      <button id="findBtn" onclick="doFind()">Find email</button>
+      <div id="singleResult" class="result"></div>
+    </div>
+
+    <!-- Batch lookup -->
+    <div class="card">
+      <h2>Batch lookup <span style="font-weight:400;color:#888;font-size:0.8rem">(up to 50)</span></h2>
+      <div class="batch-contacts" id="batchContacts">
+        <!-- rows injected by JS -->
+      </div>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+        <button class="btn-secondary" onclick="addBatchRow()">+ Add contact</button>
+        <button id="batchBtn" onclick="doBatch()">Run batch</button>
+      </div>
+      <div id="batchResult" class="result"></div>
+    </div>
+  </div>
+
+  <script>
+    // ---- Batch rows ----
+    let batchRowId = 0;
+
+    function addBatchRow(fn='', ln='', dom='') {
+      const id = ++batchRowId;
+      const container = document.getElementById('batchContacts');
+      const row = document.createElement('div');
+      row.className = 'contact-row';
+      row.id = `brow-${id}`;
+      row.innerHTML = `
+        <input type="text" placeholder="First" value="${fn}" id="bf-${id}" />
+        <input type="text" placeholder="Last"  value="${ln}" id="bl-${id}" />
+        <input type="text" placeholder="domain.com" value="${dom}" id="bd-${id}" />
+        <button class="btn-secondary remove-btn" onclick="removeRow(${id})">✕</button>
+      `;
+      container.appendChild(row);
+    }
+
+    function removeRow(id) {
+      const el = document.getElementById(`brow-${id}`);
+      if (el) el.remove();
+    }
+
+    // Start with two empty rows
+    addBatchRow();
+    addBatchRow();
+
+    // ---- Helpers ----
+    function getConfig() {
+      return {
+        baseUrl: document.getElementById('baseUrl').value.trim().replace(/\/$/, ''),
+        apiKey:  document.getElementById('apiKey').value.trim(),
+      };
+    }
+
+    function setLoading(btnId, loading) {
+      const btn = document.getElementById(btnId);
+      btn.disabled = loading;
+      btn.innerHTML = loading
+        ? '<span class="spinner"></span> Working…'
+        : btnId === 'findBtn' ? 'Find email' : 'Run batch';
+    }
+
+    function badgeHtml(status) {
+      return `<span class="result-badge badge-${status}">${status.replace('_', ' ')}</span>`;
+    }
+
+    function renderJson(obj) {
+      return `<pre>${JSON.stringify(obj, null, 2)}</pre>`;
+    }
+
+    function renderError(msg) {
+      return `<div class="error-msg">${msg}</div>`;
+    }
+
+    async function apiFetch(path, body) {
+      const { baseUrl, apiKey } = getConfig();
+      const res = await fetch(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-API-Key': apiKey,
+        },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      return data;
+    }
+
+    // ---- Single find ----
+    async function doFind() {
+      const resultEl = document.getElementById('singleResult');
+      setLoading('findBtn', true);
+      resultEl.innerHTML = '';
+
+      const body = {
+        first_name: document.getElementById('firstName').value.trim(),
+        last_name:  document.getElementById('lastName').value.trim(),
+        domain:     document.getElementById('domain').value.trim(),
+        return_attempts: document.getElementById('returnAttempts').checked,
+      };
+      const mid = document.getElementById('middleName').value.trim();
+      if (mid) body.middle_name = mid;
+
+      try {
+        const data = await apiFetch('/find', body);
+        let html = badgeHtml(data.status);
+        if (data.email) {
+          html += `<div style="font-size:1.1rem;font-weight:700;margin-bottom:0.5rem">${data.email}</div>`;
+        }
+        if (data.message) {
+          html += `<p style="color:#666;font-size:0.85rem;margin-bottom:0.5rem">${data.message}</p>`;
+        }
+        html += renderJson(data);
+        resultEl.innerHTML = html;
+      } catch(e) {
+        resultEl.innerHTML = renderError(e.message);
+      } finally {
+        setLoading('findBtn', false);
+      }
+    }
+
+    // ---- Batch find ----
+    async function doBatch() {
+      const resultEl = document.getElementById('batchResult');
+      setLoading('batchBtn', true);
+      resultEl.innerHTML = '';
+
+      const rows = document.querySelectorAll('#batchContacts .contact-row');
+      const contacts = [];
+      rows.forEach(row => {
+        const id = row.id.replace('brow-', '');
+        const fn = document.getElementById(`bf-${id}`).value.trim();
+        const ln = document.getElementById(`bl-${id}`).value.trim();
+        const dom = document.getElementById(`bd-${id}`).value.trim();
+        if (fn && ln && dom) contacts.push({ first_name: fn, last_name: ln, domain: dom });
+      });
+
+      if (!contacts.length) {
+        resultEl.innerHTML = renderError('No valid contacts to submit.');
+        setLoading('batchBtn', false);
+        return;
+      }
+
+      try {
+        const data = await apiFetch('/find/batch', { contacts });
+        let html = `<p style="font-size:0.85rem;color:#666;margin-bottom:0.75rem">${data.results.length} result(s)</p>`;
+        data.results.forEach((r, i) => {
+          const c = contacts[i];
+          html += `
+            <div class="batch-result-item">
+              <div class="contact-label">${c.first_name} ${c.last_name} · ${c.domain}</div>
+              ${badgeHtml(r.status)}
+              <span class="email-found">${r.email || '—'}</span>
+              ${r.message ? `<p style="color:#666;font-size:0.8rem;margin-top:0.25rem">${r.message}</p>` : ''}
+            </div>`;
+        });
+        html += `<details style="margin-top:0.75rem"><summary style="cursor:pointer;font-size:0.8rem;color:#666">Raw JSON</summary>${renderJson(data)}</details>`;
+        resultEl.innerHTML = html;
+      } catch(e) {
+        resultEl.innerHTML = renderError(e.message);
+      } finally {
+        setLoading('batchBtn', false);
+      }
+    }
+
+    // Allow Enter key on single form
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && e.target.closest('.card') && !e.target.closest('#batchContacts')) {
+        doFind();
+      }
+    });
+  </script>
+</body>
+</html>
