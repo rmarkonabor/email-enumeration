@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { addHistory, type FindRequest, type FindResponse } from "@/lib/api";
+import { addHistory, generateRunId, type FindRequest, type FindResponse } from "@/lib/api";
 import StatusBadge from "@/components/StatusBadge";
 import ProviderPicker from "@/components/ProviderPicker";
 
@@ -104,6 +104,7 @@ export default function BatchPage() {
     setProgress({ done: 0, total: valid.length });
     setEta(null);
     startTimeRef.current = Date.now();
+    const batchRunId = generateRunId();
 
     const contacts: FindRequest[] = valid.map(({ _id, ...rest }) => ({
       ...rest,
@@ -166,7 +167,7 @@ export default function BatchPage() {
               );
               return updated;
             });
-            addHistory(contacts[event.index], response);
+            addHistory(contacts[event.index], response, batchRunId, "batch");
 
             setProgress(p => {
               const done = p.done + 1;

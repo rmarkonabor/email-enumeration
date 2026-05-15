@@ -22,9 +22,18 @@ export interface BatchResponse {
 
 export interface HistoryEntry {
   id: string;
+  runId: string;
+  type: "single" | "batch";
   ts: number;
   request: FindRequest;
   response: FindResponse;
+}
+
+export interface HistoryRun {
+  runId: string;
+  type: "single" | "batch";
+  ts: number;
+  entries: HistoryEntry[];
 }
 
 const DEFAULT_API_URL = "https://verify1.mailcheckhq.com";
@@ -65,6 +74,10 @@ export async function findBatch(contacts: FindRequest[]): Promise<BatchResponse>
   return apiFetch<BatchResponse>("/find/batch", { contacts, verify_provider: verifyProvider, zerobounce_api_key: zerobounceKey, reoon_api_key: reoonKey });
 }
 
+export function generateRunId(): string {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
 // History stored in localStorage
 const HISTORY_KEY = "ef_history";
 
@@ -77,10 +90,28 @@ export function getHistory(): HistoryEntry[] {
   }
 }
 
-export function addHistory(request: FindRequest, response: FindResponse): void {
+export function getHistoryRuns(): HistoryRun[] {
+  const entries = getHistory();
+  const runMap = new Map<string, HistoryRun>();
+
+  for (const entry of entries) {
+    const runId = entry.runId ?? entry.id;
+    const type = entry.type ?? "single";
+    if (!runMap.has(runId)) {
+      runMap.set(runId, { runId, type, ts: entry.ts, entries: [] });
+    }
+    runMap.get(runId)!.entries.push(entry);
+  }
+
+  return Array.from(runMap.values()).sort((a, b) => b.ts - a.ts);
+}
+
+export function addHistory(request: FindRequest, response: FindResponse, runId: string, type: "single" | "batch"): void {
   const entries = getHistory();
   const entry: HistoryEntry = {
     id: Math.random().toString(36).slice(2),
+    runId,
+    type,
     ts: Date.now(),
     request,
     response,

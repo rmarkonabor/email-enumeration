@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { addHistory, type FindRequest, type FindResponse } from "@/lib/api";
+import { addHistory, generateRunId, type FindRequest, type FindResponse } from "@/lib/api";
 import ResultCard from "@/components/ResultCard";
 import ProviderPicker from "@/components/ProviderPicker";
 
@@ -84,7 +84,7 @@ export default function SinglePage() {
           return_attempts: true,
         };
         if (form.middle_name?.trim()) req.middle_name = form.middle_name.trim();
-        addHistory(req, res);
+        addHistory(req, res, generateRunId(), "single");
         es.close();
         setLoading(false);
       } else if (event.type === "error") {
