@@ -167,7 +167,7 @@ export default function BatchPage() {
               );
               return updated;
             });
-            addHistory(contacts[event.index], response, batchRunId, "batch");
+            addHistory(contacts[event.index], response, batchRunId, "batch", verifyProvider);
 
             setProgress(p => {
               const done = p.done + 1;

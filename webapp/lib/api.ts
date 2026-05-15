@@ -24,6 +24,7 @@ export interface HistoryEntry {
   id: string;
   runId: string;
   type: "single" | "batch";
+  provider: string;
   ts: number;
   request: FindRequest;
   response: FindResponse;
@@ -32,6 +33,7 @@ export interface HistoryEntry {
 export interface HistoryRun {
   runId: string;
   type: "single" | "batch";
+  provider: string;
   ts: number;
   entries: HistoryEntry[];
 }
@@ -97,8 +99,9 @@ export function getHistoryRuns(): HistoryRun[] {
   for (const entry of entries) {
     const runId = entry.runId ?? entry.id;
     const type = entry.type ?? "single";
+    const provider = entry.provider ?? "smtp";
     if (!runMap.has(runId)) {
-      runMap.set(runId, { runId, type, ts: entry.ts, entries: [] });
+      runMap.set(runId, { runId, type, provider, ts: entry.ts, entries: [] });
     }
     runMap.get(runId)!.entries.push(entry);
   }
@@ -106,12 +109,19 @@ export function getHistoryRuns(): HistoryRun[] {
   return Array.from(runMap.values()).sort((a, b) => b.ts - a.ts);
 }
 
-export function addHistory(request: FindRequest, response: FindResponse, runId: string, type: "single" | "batch"): void {
+export function addHistory(
+  request: FindRequest,
+  response: FindResponse,
+  runId: string,
+  type: "single" | "batch",
+  provider: string,
+): void {
   const entries = getHistory();
   const entry: HistoryEntry = {
     id: Math.random().toString(36).slice(2),
     runId,
     type,
+    provider,
     ts: Date.now(),
     request,
     response,

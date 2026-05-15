@@ -4,8 +4,14 @@ import { useState, useEffect } from "react";
 import { getHistoryRuns, clearHistory, type HistoryRun } from "@/lib/api";
 import StatusBadge from "@/components/StatusBadge";
 
+const PROVIDER_LABEL: Record<string, string> = {
+  smtp: "SMTP",
+  zerobounce: "ZeroBounce",
+  reoon: "Reoon",
+};
+
 function exportRunCSV(run: HistoryRun) {
-  const header = "date,first_name,last_name,domain,email,status,fallback_recommended";
+  const header = "date,first_name,last_name,domain,email,status,fallback_recommended,verified_via";
   const lines = run.entries.map(e => [
     new Date(e.ts).toISOString(),
     e.request.first_name,
@@ -14,6 +20,7 @@ function exportRunCSV(run: HistoryRun) {
     e.response.email ?? "",
     e.response.status,
     e.response.fallback_recommended,
+    e.provider ?? "smtp",
   ].join(","));
   const blob = new Blob([[header, ...lines].join("\n")], { type: "text/csv" });
   const url = URL.createObjectURL(blob);
@@ -39,14 +46,17 @@ function RunCard({ run }: { run: HistoryRun }) {
           >
             {expanded ? "▾" : "▸"}
           </button>
-          <div>
+          <div className="flex items-center gap-2">
             <span className="text-sm font-semibold text-slate-700">
               {run.type === "batch"
                 ? `Batch run — ${run.entries.length} contact${run.entries.length !== 1 ? "s" : ""}`
                 : "Single lookup"}
             </span>
+            <span className="text-xs px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-100 font-medium">
+              {PROVIDER_LABEL[run.provider] ?? run.provider}
+            </span>
             {run.type === "batch" && (
-              <span className="ml-2 text-xs text-slate-400">{verified} verified</span>
+              <span className="text-xs text-slate-400">{verified} verified</span>
             )}
           </div>
         </div>

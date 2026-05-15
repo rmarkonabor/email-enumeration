@@ -84,7 +84,7 @@ export default function SinglePage() {
           return_attempts: true,
         };
         if (form.middle_name?.trim()) req.middle_name = form.middle_name.trim();
-        addHistory(req, res, generateRunId(), "single");
+        addHistory(req, res, generateRunId(), "single", verifyProvider);
         es.close();
         setLoading(false);
       } else if (event.type === "error") {
