@@ -29,11 +29,13 @@ export interface HistoryEntry {
 
 const DEFAULT_API_URL = "https://verify1.mailcheckhq.com";
 
-function getConfig(): { baseUrl: string; apiKey: string } {
-  if (typeof window === "undefined") return { baseUrl: "", apiKey: "" };
+function getConfig() {
+  if (typeof window === "undefined") return { baseUrl: "", apiKey: "", verifyProvider: "smtp", verifyKey: "" };
   return {
     baseUrl: localStorage.getItem("ef_base_url") || DEFAULT_API_URL,
     apiKey: localStorage.getItem("ef_api_key") || "",
+    verifyProvider: localStorage.getItem("ef_verify_provider") || "smtp",
+    verifyKey: localStorage.getItem("ef_verify_key") || "",
   };
 }
 
@@ -53,11 +55,13 @@ async function apiFetch<T>(path: string, body: unknown): Promise<T> {
 }
 
 export async function findEmail(req: FindRequest): Promise<FindResponse> {
-  return apiFetch<FindResponse>("/find", req);
+  const { verifyProvider, verifyKey } = getConfig();
+  return apiFetch<FindResponse>("/find", { ...req, verify_provider: verifyProvider, verify_api_key: verifyKey });
 }
 
 export async function findBatch(contacts: FindRequest[]): Promise<BatchResponse> {
-  return apiFetch<BatchResponse>("/find/batch", { contacts });
+  const { verifyProvider, verifyKey } = getConfig();
+  return apiFetch<BatchResponse>("/find/batch", { contacts, verify_provider: verifyProvider, verify_api_key: verifyKey });
 }
 
 // History stored in localStorage

@@ -113,13 +113,13 @@ export default function BatchPage() {
     }));
     setResults(initialResults);
 
-    const { baseUrl, apiKey } = getConfig();
+    const { baseUrl, apiKey, verifyProvider, verifyKey } = getConfig();
 
     try {
       const res = await fetch(`${baseUrl}/find/batch/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
-        body: JSON.stringify({ contacts }),
+        body: JSON.stringify({ contacts, verify_provider: verifyProvider, verify_api_key: verifyKey }),
         signal: abort.signal,
       });
 

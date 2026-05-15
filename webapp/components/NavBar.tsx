@@ -18,18 +18,13 @@ export default function NavBar() {
 
       const { data: profile } = await supabase
         .from("profiles")
-        .select("api_key")
+        .select("api_key, verify_provider, verify_api_key")
         .eq("id", user.id)
         .single();
 
-      if (profile?.api_key) {
-        localStorage.setItem("ef_api_key", profile.api_key);
-      }
-
-      const envUrl = process.env.NEXT_PUBLIC_API_URL;
-      if (envUrl && !localStorage.getItem("ef_base_url")) {
-        localStorage.setItem("ef_base_url", envUrl);
-      }
+      if (profile?.api_key) localStorage.setItem("ef_api_key", profile.api_key);
+      if (profile?.verify_provider) localStorage.setItem("ef_verify_provider", profile.verify_provider);
+      if (profile?.verify_api_key !== undefined) localStorage.setItem("ef_verify_key", profile.verify_api_key);
     }
     loadUser();
   }, []);

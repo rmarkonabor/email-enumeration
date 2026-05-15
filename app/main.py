@@ -99,10 +99,9 @@ class FindRequest(BaseModel):
     last_name: str = Field(..., min_length=1, description="Contact's last name")
     domain: str = Field(..., min_length=3, description="Company domain (e.g. 'notion.so')")
     middle_name: str | None = Field(default=None)
-    return_attempts: bool = Field(
-        default=False,
-        description="Include the full list of candidates tried and their statuses",
-    )
+    return_attempts: bool = Field(default=False)
+    verify_provider: str = Field(default="smtp", description="smtp|zerobounce|reoon")
+    verify_api_key: str = Field(default="")
 
 
 class FindResponse(BaseModel):
@@ -117,6 +116,8 @@ class FindResponse(BaseModel):
 
 class BatchRequest(BaseModel):
     contacts: list[FindRequest] = Field(..., max_length=MAX_BATCH_SIZE)
+    verify_provider: str = Field(default="smtp")
+    verify_api_key: str = Field(default="")
 
 
 class BatchResponse(BaseModel):
@@ -165,6 +166,8 @@ async def find(req: FindRequest) -> FindResponse:
             domain=req.domain,
             middle_name=req.middle_name,
             return_attempts=req.return_attempts,
+            provider=req.verify_provider,
+            provider_key=req.verify_api_key,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -181,6 +184,8 @@ async def find_stream(
     domain: str = Query(...),
     middle_name: str | None = Query(default=None),
     api_key: str = Query(default=""),
+    verify_provider: str = Query(default="smtp"),
+    verify_api_key: str = Query(default=""),
 ) -> StreamingResponse:
     if not await is_valid_key(api_key):
         raise HTTPException(status_code=401, detail="Invalid or missing api_key")
@@ -189,7 +194,10 @@ async def find_stream(
 
     async def event_gen():
         try:
-            async for event in finder.find_stream(first_name, last_name, domain, middle_name):
+            async for event in finder.find_stream(
+                first_name, last_name, domain, middle_name,
+                provider=verify_provider, provider_key=verify_api_key,
+            ):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
@@ -217,6 +225,8 @@ async def find_batch_stream(req: BatchRequest) -> StreamingResponse:
                     last_name=contact.last_name,
                     domain=contact.domain,
                     middle_name=contact.middle_name,
+                    provider=req.verify_provider,
+                    provider_key=req.verify_api_key,
                 )
                 resp = _to_response(result, False)
                 yield f"data: {json.dumps({'type': 'contact_done', 'index': i, **resp.model_dump()})}\n\n"

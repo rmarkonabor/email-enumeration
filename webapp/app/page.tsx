@@ -45,12 +45,14 @@ export default function SinglePage() {
     setError(null);
     setEvents([]);
 
-    const { baseUrl, apiKey } = getConfig();
+    const { baseUrl, apiKey, verifyProvider, verifyKey } = getConfig();
     const params = new URLSearchParams({
       first_name: form.first_name.trim(),
       last_name: form.last_name.trim(),
       domain: form.domain.trim(),
       api_key: apiKey,
+      verify_provider: verifyProvider,
+      verify_api_key: verifyKey,
     });
     if (form.middle_name?.trim()) params.set("middle_name", form.middle_name.trim());
 
