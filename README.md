@@ -59,8 +59,39 @@ All config is via environment variables (`.env`):
 
 ## API
 
+### Authentication
+
+All endpoints (except `/health`) require an `X-API-Key` header matching your `API_KEY` env var.
+
+### Verification providers
+
+Every `/find` and `/find/batch` request accepts an optional `verify_provider` field:
+
+| Value | Description |
+|---|---|
+| `smtp` | Free SMTP RCPT-TO check (default). Works well on non-catch-all domains. |
+| `zerobounce` | Uses the [ZeroBounce](https://www.zerobounce.net/) API. Pass your key in `zerobounce_api_key`. Handles catch-all domains. |
+| `reoon` | Uses the [Reoon](https://emailverifier.reoon.com/) API (power mode). Pass your key in `reoon_api_key`. Handles catch-all domains. |
+
+When `verify_provider` is `smtp` the `zerobounce_api_key` and `reoon_api_key` fields are ignored.
+
+---
+
 ### `POST /find`
 
+**SMTP (default)**
+```bash
+curl -X POST https://your-api.com/find \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "first_name": "Jamie",
+    "last_name": "Lee",
+    "domain": "notion.so"
+  }'
+```
+
+**ZeroBounce**
 ```bash
 curl -X POST https://your-api.com/find \
   -H "X-API-Key: $API_KEY" \
@@ -69,11 +100,39 @@ curl -X POST https://your-api.com/find \
     "first_name": "Jamie",
     "last_name": "Lee",
     "domain": "notion.so",
-    "return_attempts": false
+    "verify_provider": "zerobounce",
+    "zerobounce_api_key": "your_zerobounce_key"
   }'
 ```
 
-Response shapes:
+**Reoon**
+```bash
+curl -X POST https://your-api.com/find \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "first_name": "Jamie",
+    "last_name": "Lee",
+    "domain": "notion.so",
+    "verify_provider": "reoon",
+    "reoon_api_key": "your_reoon_key"
+  }'
+```
+
+**Request fields**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `first_name` | string | *(required)* | |
+| `last_name` | string | *(required)* | |
+| `domain` | string | *(required)* | e.g. `notion.so` |
+| `middle_name` | string | `""` | Optional, adds extra permutations |
+| `verify_provider` | string | `smtp` | `smtp` \| `zerobounce` \| `reoon` |
+| `zerobounce_api_key` | string | `""` | Required when `verify_provider` is `zerobounce` |
+| `reoon_api_key` | string | `""` | Required when `verify_provider` is `reoon` |
+| `return_attempts` | bool | `false` | Include every candidate tried and its result |
+
+**Response shapes**
 
 ```json
 // Verified
@@ -107,22 +166,73 @@ Response shapes:
 }
 ```
 
-Set `"return_attempts": true` to see every candidate and its SMTP response (useful for debugging).
+---
 
 ### `POST /find/batch`
 
-Same body wrapped in `contacts`, up to 50 per call:
+Same fields as `/find`, with contacts wrapped in an array. Up to 50 contacts per call. Concurrency is capped server-side at 5.
 
-```json
-{
-  "contacts": [
-    {"first_name": "Jamie", "last_name": "Lee", "domain": "notion.so"},
-    {"first_name": "Sarah", "last_name": "Chen", "domain": "stripe.com"}
-  ]
-}
+**SMTP (default)**
+```bash
+curl -X POST https://your-api.com/find/batch \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "contacts": [
+      {"first_name": "Jamie", "last_name": "Lee", "domain": "notion.so"},
+      {"first_name": "Sarah", "last_name": "Chen", "domain": "stripe.com"}
+    ]
+  }'
 ```
 
-Concurrency is capped server-side at 5 to avoid hammering mail servers.
+**ZeroBounce**
+```bash
+curl -X POST https://your-api.com/find/batch \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "contacts": [
+      {"first_name": "Jamie", "last_name": "Lee", "domain": "notion.so"},
+      {"first_name": "Sarah", "last_name": "Chen", "domain": "stripe.com"}
+    ],
+    "verify_provider": "zerobounce",
+    "zerobounce_api_key": "your_zerobounce_key"
+  }'
+```
+
+**Reoon**
+```bash
+curl -X POST https://your-api.com/find/batch \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "contacts": [
+      {"first_name": "Jamie", "last_name": "Lee", "domain": "notion.so"},
+      {"first_name": "Sarah", "last_name": "Chen", "domain": "stripe.com"}
+    ],
+    "verify_provider": "reoon",
+    "reoon_api_key": "your_reoon_key"
+  }'
+```
+
+Response is `{ "results": [ ...same shape as /find... ] }` in the same order as the input.
+
+---
+
+### `GET /find/stream`
+
+Server-sent events version of `/find` — useful for live progress in UIs. Parameters are passed as query strings instead of a JSON body.
+
+```bash
+curl "https://your-api.com/find/stream?\
+first_name=Jamie&last_name=Lee&domain=notion.so\
+&api_key=$API_KEY&verify_provider=zerobounce\
+&zerobounce_api_key=your_zerobounce_key"
+```
+
+Each SSE message is a JSON object. Event types: `status`, `catch_all`, `candidates`, `trying`, `attempt`, `done`, `error`.
+
+---
 
 ### `GET /health`
 
