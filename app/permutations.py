@@ -74,20 +74,20 @@ def generate_permutations(
         patterns.append(f"{local}@{domain}")
 
     # ----- Highest-probability patterns first -----
-    add(f"{first}.{last}")        # jamie.lee
-    add(f"{first}{last}")         # jamielee
-    add(f"{first}")               # jamie
-    add(f"{f}{last}")             # jlee
-    add(f"{first}.{l}")           # jamie.l
-    add(f"{f}.{last}")            # j.lee
-    add(f"{first}_{last}")        # jamie_lee
-    add(f"{first}-{last}")        # jamie-lee
+    add(f"{first}.{last}")        # jamie.lee   ~35%
+    add(f"{f}{last}")             # jlee        ~14%
+    add(f"{first}")               # jamie       ~14%
+    add(f"{first}{last}")         # jamielee    ~10%
+    add(f"{f}.{last}")            # j.lee        ~6%
+    add(f"{first}.{l}")           # jamie.l      ~5%
+    add(f"{first}{l}")            # jamiel        ~3%
+    add(f"{first}_{last}")        # jamie_lee     ~2%
+    add(f"{first}-{last}")        # jamie-lee     ~1%
     add(f"{last}.{first}")        # lee.jamie
     add(f"{last}{first}")         # leejamie
     add(f"{last}{f}")             # leej
     add(f"{last}.{f}")            # lee.j
     add(f"{last}")                # lee
-    add(f"{first}{l}")            # jamiel
     add(f"{f}.{l}")               # j.l
     add(f"{f}{l}")                # jl
 
