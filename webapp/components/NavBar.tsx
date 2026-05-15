@@ -70,15 +70,17 @@ export default function NavBar() {
             ))}
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          {email && <span className="text-xs text-slate-500 hidden sm:block">{email}</span>}
-          <button
-            onClick={signOut}
-            className="text-xs text-slate-400 hover:text-white border border-slate-700 hover:border-slate-600 rounded-md px-3 py-1.5 transition-colors"
-          >
-            Sign out
-          </button>
-        </div>
+        {email && (
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-slate-500 hidden sm:block">{email}</span>
+            <button
+              onClick={signOut}
+              className="text-xs text-slate-400 hover:text-white border border-slate-700 hover:border-slate-600 rounded-md px-3 py-1.5 transition-colors"
+            >
+              Sign out
+            </button>
+          </div>
+        )}
       </div>
     </nav>
   );
