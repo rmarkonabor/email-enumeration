@@ -16,8 +16,7 @@ export default function SettingsPage() {
   useEffect(() => {
     setBaseUrl(
       localStorage.getItem("ef_base_url") ||
-      process.env.NEXT_PUBLIC_API_URL ||
-      ""
+      "https://verify1.mailcheckhq.com"
     );
     loadApiKey();
   }, []);

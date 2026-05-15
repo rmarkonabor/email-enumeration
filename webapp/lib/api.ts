@@ -27,10 +27,12 @@ export interface HistoryEntry {
   response: FindResponse;
 }
 
+const DEFAULT_API_URL = "https://verify1.mailcheckhq.com";
+
 function getConfig(): { baseUrl: string; apiKey: string } {
   if (typeof window === "undefined") return { baseUrl: "", apiKey: "" };
   return {
-    baseUrl: localStorage.getItem("ef_base_url") || "http://localhost:8000",
+    baseUrl: localStorage.getItem("ef_base_url") || DEFAULT_API_URL,
     apiKey: localStorage.getItem("ef_api_key") || "",
   };
 }
