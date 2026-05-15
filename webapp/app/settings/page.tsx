@@ -16,7 +16,8 @@ export default function SettingsPage() {
   const [copied, setCopied] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [provider, setProvider] = useState<Provider>("smtp");
-  const [providerKey, setProviderKey] = useState("");
+  const [zerobounceKey, setZerobounceKey] = useState("");
+  const [reoonKey, setReoonKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const supabase = createClient();
@@ -28,13 +29,14 @@ export default function SettingsPage() {
     if (!user) return;
     const { data } = await supabase
       .from("profiles")
-      .select("api_key, verify_provider, verify_api_key")
+      .select("api_key, verify_provider, zerobounce_api_key, reoon_api_key")
       .eq("id", user.id)
       .single();
     if (!data) return;
     if (data.api_key) { setApiKey(data.api_key); localStorage.setItem("ef_api_key", data.api_key); }
     if (data.verify_provider) { setProvider(data.verify_provider as Provider); localStorage.setItem("ef_verify_provider", data.verify_provider); }
-    if (data.verify_api_key !== undefined) { setProviderKey(data.verify_api_key); localStorage.setItem("ef_verify_key", data.verify_api_key); }
+    if (data.zerobounce_api_key !== undefined) { setZerobounceKey(data.zerobounce_api_key ?? ""); localStorage.setItem("ef_zerobounce_key", data.zerobounce_api_key ?? ""); }
+    if (data.reoon_api_key !== undefined) { setReoonKey(data.reoon_api_key ?? ""); localStorage.setItem("ef_reoon_key", data.reoon_api_key ?? ""); }
   }
 
   async function copy() {
@@ -60,18 +62,17 @@ export default function SettingsPage() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
     const { error } = await supabase.from("profiles")
-      .update({ verify_provider: provider, verify_api_key: provider === "smtp" ? "" : providerKey })
+      .update({ verify_provider: provider, zerobounce_api_key: zerobounceKey, reoon_api_key: reoonKey })
       .eq("id", user.id);
     if (!error) {
       localStorage.setItem("ef_verify_provider", provider);
-      localStorage.setItem("ef_verify_key", provider === "smtp" ? "" : providerKey);
+      localStorage.setItem("ef_zerobounce_key", zerobounceKey);
+      localStorage.setItem("ef_reoon_key", reoonKey);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     }
     setSaving(false);
   }
-
-  const selectedProvider = PROVIDERS.find(p => p.id === provider)!;
 
   return (
     <div className="max-w-lg space-y-6">
@@ -102,30 +103,40 @@ export default function SettingsPage() {
           ))}
         </div>
 
-        {provider !== "smtp" && (
+        <div className="space-y-3 pt-1">
           <div>
-            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
-              {selectedProvider.label} API Key
-            </label>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">ZeroBounce API Key</label>
             <input
               type="password"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 transition-colors"
-              value={providerKey}
-              onChange={e => setProviderKey(e.target.value)}
-              placeholder="Paste your API key here"
+              value={zerobounceKey}
+              onChange={e => setZerobounceKey(e.target.value)}
+              placeholder="Paste your ZeroBounce key"
             />
-            {selectedProvider.docsUrl && (
-              <a href={selectedProvider.docsUrl} target="_blank" rel="noopener noreferrer"
-                className="text-xs text-indigo-600 hover:underline mt-1 inline-block">
-                Get your {selectedProvider.label} API key →
-              </a>
-            )}
+            <a href="https://www.zerobounce.net/members/apikeys" target="_blank" rel="noopener noreferrer"
+              className="text-xs text-indigo-600 hover:underline mt-1 inline-block">
+              Get your ZeroBounce API key →
+            </a>
           </div>
-        )}
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Reoon API Key</label>
+            <input
+              type="password"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 transition-colors"
+              value={reoonKey}
+              onChange={e => setReoonKey(e.target.value)}
+              placeholder="Paste your Reoon key"
+            />
+            <a href="https://emailverifier.reoon.com/dashboard" target="_blank" rel="noopener noreferrer"
+              className="text-xs text-indigo-600 hover:underline mt-1 inline-block">
+              Get your Reoon API key →
+            </a>
+          </div>
+        </div>
 
         <button
           onClick={saveVerification}
-          disabled={saving || (provider !== "smtp" && !providerKey)}
+          disabled={saving || (provider === "zerobounce" && !zerobounceKey) || (provider === "reoon" && !reoonKey)}
           className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors"
         >
           {saving ? "Saving…" : saved ? "Saved!" : "Save"}

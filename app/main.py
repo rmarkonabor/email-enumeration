@@ -101,7 +101,8 @@ class FindRequest(BaseModel):
     middle_name: str | None = Field(default=None)
     return_attempts: bool = Field(default=False)
     verify_provider: str = Field(default="smtp", description="smtp|zerobounce|reoon")
-    verify_api_key: str = Field(default="")
+    zerobounce_api_key: str = Field(default="")
+    reoon_api_key: str = Field(default="")
 
 
 class FindResponse(BaseModel):
@@ -117,7 +118,8 @@ class FindResponse(BaseModel):
 class BatchRequest(BaseModel):
     contacts: list[FindRequest] = Field(..., max_length=MAX_BATCH_SIZE)
     verify_provider: str = Field(default="smtp")
-    verify_api_key: str = Field(default="")
+    zerobounce_api_key: str = Field(default="")
+    reoon_api_key: str = Field(default="")
 
 
 class BatchResponse(BaseModel):
@@ -159,6 +161,7 @@ def _to_response(result, return_attempts: bool) -> FindResponse:
 )
 async def find(req: FindRequest) -> FindResponse:
     finder: EmailFinder = app.state.finder
+    provider_key = req.zerobounce_api_key if req.verify_provider == "zerobounce" else (req.reoon_api_key if req.verify_provider == "reoon" else "")
     try:
         result = await finder.find(
             first_name=req.first_name,
@@ -167,7 +170,7 @@ async def find(req: FindRequest) -> FindResponse:
             middle_name=req.middle_name,
             return_attempts=req.return_attempts,
             provider=req.verify_provider,
-            provider_key=req.verify_api_key,
+            provider_key=provider_key,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -185,18 +188,20 @@ async def find_stream(
     middle_name: str | None = Query(default=None),
     api_key: str = Query(default=""),
     verify_provider: str = Query(default="smtp"),
-    verify_api_key: str = Query(default=""),
+    zerobounce_api_key: str = Query(default=""),
+    reoon_api_key: str = Query(default=""),
 ) -> StreamingResponse:
     if not await is_valid_key(api_key):
         raise HTTPException(status_code=401, detail="Invalid or missing api_key")
 
+    provider_key = zerobounce_api_key if verify_provider == "zerobounce" else (reoon_api_key if verify_provider == "reoon" else "")
     finder: EmailFinder = app.state.finder
 
     async def event_gen():
         try:
             async for event in finder.find_stream(
                 first_name, last_name, domain, middle_name,
-                provider=verify_provider, provider_key=verify_api_key,
+                provider=verify_provider, provider_key=provider_key,
             ):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as e:
@@ -220,13 +225,14 @@ async def find_batch_stream(req: BatchRequest) -> StreamingResponse:
         for i, contact in enumerate(req.contacts):
             yield f"data: {json.dumps({'type': 'contact_start', 'index': i, 'name': f'{contact.first_name} {contact.last_name}', 'domain': contact.domain})}\n\n"
             try:
+                batch_provider_key = req.zerobounce_api_key if req.verify_provider == "zerobounce" else (req.reoon_api_key if req.verify_provider == "reoon" else "")
                 result = await finder.find(
                     first_name=contact.first_name,
                     last_name=contact.last_name,
                     domain=contact.domain,
                     middle_name=contact.middle_name,
                     provider=req.verify_provider,
-                    provider_key=req.verify_api_key,
+                    provider_key=batch_provider_key,
                 )
                 resp = _to_response(result, False)
                 yield f"data: {json.dumps({'type': 'contact_done', 'index': i, **resp.model_dump()})}\n\n"

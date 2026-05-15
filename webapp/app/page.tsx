@@ -15,13 +15,14 @@ type ProgressEvent =
   | { type: "done" } & FindResponse
   | { type: "error"; message: string };
 
-function getConfig(): { baseUrl: string; apiKey: string; verifyProvider: string; verifyKey: string } {
-  if (typeof window === "undefined") return { baseUrl: "", apiKey: "", verifyProvider: "smtp", verifyKey: "" };
+function getConfig(): { baseUrl: string; apiKey: string; verifyProvider: string; zerobounceKey: string; reoonKey: string } {
+  if (typeof window === "undefined") return { baseUrl: "", apiKey: "", verifyProvider: "smtp", zerobounceKey: "", reoonKey: "" };
   return {
     baseUrl: localStorage.getItem("ef_base_url") || "https://verify1.mailcheckhq.com",
     apiKey: localStorage.getItem("ef_api_key") || "",
     verifyProvider: localStorage.getItem("ef_verify_provider") || "smtp",
-    verifyKey: localStorage.getItem("ef_verify_key") || "",
+    zerobounceKey: localStorage.getItem("ef_zerobounce_key") || "",
+    reoonKey: localStorage.getItem("ef_reoon_key") || "",
   };
 }
 
@@ -48,14 +49,15 @@ export default function SinglePage() {
     setError(null);
     setEvents([]);
 
-    const { baseUrl, apiKey, verifyProvider, verifyKey } = getConfig();
+    const { baseUrl, apiKey, verifyProvider, zerobounceKey, reoonKey } = getConfig();
     const params = new URLSearchParams({
       first_name: form.first_name.trim(),
       last_name: form.last_name.trim(),
       domain: form.domain.trim(),
       api_key: apiKey,
       verify_provider: verifyProvider,
-      verify_api_key: verifyKey,
+      zerobounce_api_key: zerobounceKey,
+      reoon_api_key: reoonKey,
     });
     if (form.middle_name?.trim()) params.set("middle_name", form.middle_name.trim());
 

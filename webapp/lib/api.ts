@@ -30,12 +30,13 @@ export interface HistoryEntry {
 const DEFAULT_API_URL = "https://verify1.mailcheckhq.com";
 
 function getConfig() {
-  if (typeof window === "undefined") return { baseUrl: "", apiKey: "", verifyProvider: "smtp", verifyKey: "" };
+  if (typeof window === "undefined") return { baseUrl: "", apiKey: "", verifyProvider: "smtp", zerobounceKey: "", reoonKey: "" };
   return {
     baseUrl: localStorage.getItem("ef_base_url") || DEFAULT_API_URL,
     apiKey: localStorage.getItem("ef_api_key") || "",
     verifyProvider: localStorage.getItem("ef_verify_provider") || "smtp",
-    verifyKey: localStorage.getItem("ef_verify_key") || "",
+    zerobounceKey: localStorage.getItem("ef_zerobounce_key") || "",
+    reoonKey: localStorage.getItem("ef_reoon_key") || "",
   };
 }
 
@@ -55,13 +56,13 @@ async function apiFetch<T>(path: string, body: unknown): Promise<T> {
 }
 
 export async function findEmail(req: FindRequest): Promise<FindResponse> {
-  const { verifyProvider, verifyKey } = getConfig();
-  return apiFetch<FindResponse>("/find", { ...req, verify_provider: verifyProvider, verify_api_key: verifyKey });
+  const { verifyProvider, zerobounceKey, reoonKey } = getConfig();
+  return apiFetch<FindResponse>("/find", { ...req, verify_provider: verifyProvider, zerobounce_api_key: zerobounceKey, reoon_api_key: reoonKey });
 }
 
 export async function findBatch(contacts: FindRequest[]): Promise<BatchResponse> {
-  const { verifyProvider, verifyKey } = getConfig();
-  return apiFetch<BatchResponse>("/find/batch", { contacts, verify_provider: verifyProvider, verify_api_key: verifyKey });
+  const { verifyProvider, zerobounceKey, reoonKey } = getConfig();
+  return apiFetch<BatchResponse>("/find/batch", { contacts, verify_provider: verifyProvider, zerobounce_api_key: zerobounceKey, reoon_api_key: reoonKey });
 }
 
 // History stored in localStorage

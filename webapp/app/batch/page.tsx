@@ -20,13 +20,14 @@ function newRow(): Row {
   return { _id: ++rowCounter, first_name: "", last_name: "", domain: "", middle_name: "" };
 }
 
-function getConfig(): { baseUrl: string; apiKey: string; verifyProvider: string; verifyKey: string } {
-  if (typeof window === "undefined") return { baseUrl: "", apiKey: "", verifyProvider: "smtp", verifyKey: "" };
+function getConfig(): { baseUrl: string; apiKey: string; verifyProvider: string; zerobounceKey: string; reoonKey: string } {
+  if (typeof window === "undefined") return { baseUrl: "", apiKey: "", verifyProvider: "smtp", zerobounceKey: "", reoonKey: "" };
   return {
     baseUrl: localStorage.getItem("ef_base_url") || "https://verify1.mailcheckhq.com",
     apiKey: localStorage.getItem("ef_api_key") || "",
     verifyProvider: localStorage.getItem("ef_verify_provider") || "smtp",
-    verifyKey: localStorage.getItem("ef_verify_key") || "",
+    zerobounceKey: localStorage.getItem("ef_zerobounce_key") || "",
+    reoonKey: localStorage.getItem("ef_reoon_key") || "",
   };
 }
 
@@ -116,13 +117,13 @@ export default function BatchPage() {
     }));
     setResults(initialResults);
 
-    const { baseUrl, apiKey, verifyProvider, verifyKey } = getConfig();
+    const { baseUrl, apiKey, verifyProvider, zerobounceKey, reoonKey } = getConfig();
 
     try {
       const res = await fetch(`${baseUrl}/find/batch/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
-        body: JSON.stringify({ contacts, verify_provider: verifyProvider, verify_api_key: verifyKey }),
+        body: JSON.stringify({ contacts, verify_provider: verifyProvider, zerobounce_api_key: zerobounceKey, reoon_api_key: reoonKey }),
         signal: abort.signal,
       });
 

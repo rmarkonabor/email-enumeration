@@ -18,13 +18,14 @@ export default function NavBar() {
 
       const { data: profile } = await supabase
         .from("profiles")
-        .select("api_key, verify_provider, verify_api_key")
+        .select("api_key, verify_provider, zerobounce_api_key, reoon_api_key")
         .eq("id", user.id)
         .single();
 
       if (profile?.api_key) localStorage.setItem("ef_api_key", profile.api_key);
       if (profile?.verify_provider) localStorage.setItem("ef_verify_provider", profile.verify_provider);
-      if (profile?.verify_api_key !== undefined) localStorage.setItem("ef_verify_key", profile.verify_api_key);
+      if (profile?.zerobounce_api_key !== undefined) localStorage.setItem("ef_zerobounce_key", profile.zerobounce_api_key ?? "");
+      if (profile?.reoon_api_key !== undefined) localStorage.setItem("ef_reoon_key", profile.reoon_api_key ?? "");
     }
     loadUser();
   }, []);

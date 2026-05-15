@@ -40,7 +40,7 @@ async def verify_reoon(email: str, api_key: str) -> str:
         async with httpx.AsyncClient() as client:
             r = await client.get(
                 _REOON_URL,
-                params={"email": email, "key": api_key, "mode": "quick"},
+                params={"email": email, "key": api_key, "mode": "power"},
                 timeout=15,
             )
             r.raise_for_status()
