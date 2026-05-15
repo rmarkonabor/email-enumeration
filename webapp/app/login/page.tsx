@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 
@@ -43,12 +44,10 @@ export default function LoginPage() {
     <div className="min-h-screen bg-slate-900 flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-blue-600 mb-4">
-            <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-            </svg>
+          <div className="inline-flex items-center justify-center mb-4">
+            <Image src="/logo.svg" alt="Email Finder" width={72} height={72} priority />
           </div>
-          <h1 className="text-xl font-bold text-white">EmailFinder</h1>
+          <h1 className="text-xl font-bold text-white tracking-tight">Email Finder</h1>
           <p className="text-slate-400 text-sm mt-1">
             {mode === "login" ? "Sign in to your account" : "Create a new account"}
           </p>
