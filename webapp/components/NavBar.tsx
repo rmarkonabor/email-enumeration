@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import Logo from "@/components/Logo";
 import { createClient } from "@/lib/supabase/client";
 
 export default function NavBar() {
@@ -50,7 +51,7 @@ export default function NavBar() {
       <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
         <div className="flex items-center gap-8">
           <Link href="/" className="flex items-center gap-2">
-            <img src="/logo.svg" alt="Email Finder" width={28} height={28} />
+            <Logo size={28} />
             <span className="text-white font-bold text-sm tracking-tight">Email Finder</span>
           </Link>
           <div className="flex items-center gap-1">
