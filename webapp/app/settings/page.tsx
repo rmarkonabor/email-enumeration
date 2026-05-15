@@ -3,19 +3,10 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 
-type Provider = "smtp" | "zerobounce" | "reoon";
-
-const PROVIDERS: { id: Provider; label: string; description: string; docsUrl: string }[] = [
-  { id: "smtp", label: "SMTP (built-in)", description: "Free, direct SMTP verification. Requires port 25 open on your server.", docsUrl: "" },
-  { id: "zerobounce", label: "ZeroBounce", description: "Paid API — ~$0.004/email. 100 free/month.", docsUrl: "https://www.zerobounce.net/members/apikeys" },
-  { id: "reoon", label: "Reoon", description: "Paid API — ~$0.001/email. 100 free/month.", docsUrl: "https://emailverifier.reoon.com/dashboard" },
-];
-
 export default function SettingsPage() {
   const [apiKey, setApiKey] = useState("");
   const [copied, setCopied] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
-  const [provider, setProvider] = useState<Provider>("smtp");
   const [zerobounceKey, setZerobounceKey] = useState("");
   const [reoonKey, setReoonKey] = useState("");
   const [saving, setSaving] = useState(false);
@@ -29,12 +20,11 @@ export default function SettingsPage() {
     if (!user) return;
     const { data } = await supabase
       .from("profiles")
-      .select("api_key, verify_provider, zerobounce_api_key, reoon_api_key")
+      .select("api_key, zerobounce_api_key, reoon_api_key")
       .eq("id", user.id)
       .single();
     if (!data) return;
     if (data.api_key) { setApiKey(data.api_key); localStorage.setItem("ef_api_key", data.api_key); }
-    if (data.verify_provider) { setProvider(data.verify_provider as Provider); localStorage.setItem("ef_verify_provider", data.verify_provider); }
     if (data.zerobounce_api_key !== undefined) { setZerobounceKey(data.zerobounce_api_key ?? ""); localStorage.setItem("ef_zerobounce_key", data.zerobounce_api_key ?? ""); }
     if (data.reoon_api_key !== undefined) { setReoonKey(data.reoon_api_key ?? ""); localStorage.setItem("ef_reoon_key", data.reoon_api_key ?? ""); }
   }
@@ -62,10 +52,9 @@ export default function SettingsPage() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
     const { error } = await supabase.from("profiles")
-      .update({ verify_provider: provider, zerobounce_api_key: zerobounceKey, reoon_api_key: reoonKey })
+      .update({ zerobounce_api_key: zerobounceKey, reoon_api_key: reoonKey })
       .eq("id", user.id);
     if (!error) {
-      localStorage.setItem("ef_verify_provider", provider);
       localStorage.setItem("ef_zerobounce_key", zerobounceKey);
       localStorage.setItem("ef_reoon_key", reoonKey);
       setSaved(true);
@@ -81,37 +70,22 @@ export default function SettingsPage() {
         <p className="text-gray-500 text-sm">Your account and verification configuration.</p>
       </div>
 
-      {/* Verification method */}
+      {/* Email Verification API */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
-        <h2 className="font-semibold text-sm">Verification Method</h2>
-        <div className="space-y-2">
-          {PROVIDERS.map(p => (
-            <label key={p.id} className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${provider === p.id ? "border-indigo-500 bg-indigo-50/50" : "border-gray-200 hover:bg-gray-50"}`}>
-              <input
-                type="radio"
-                name="provider"
-                value={p.id}
-                checked={provider === p.id}
-                onChange={() => setProvider(p.id)}
-                className="mt-0.5 accent-indigo-600"
-              />
-              <div>
-                <p className="text-sm font-medium">{p.label}</p>
-                <p className="text-xs text-gray-400 mt-0.5">{p.description}</p>
-              </div>
-            </label>
-          ))}
+        <div>
+          <h2 className="font-semibold text-sm">Email Verification API</h2>
+          <p className="text-xs text-gray-400 mt-0.5">Save your provider keys here. Pick which one to use on the Single or Batch page.</p>
         </div>
 
-        <div className="space-y-3 pt-1">
+        <div className="space-y-3">
           <div>
-            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">ZeroBounce API Key</label>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">ZeroBounce</label>
             <input
               type="password"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 transition-colors"
               value={zerobounceKey}
               onChange={e => setZerobounceKey(e.target.value)}
-              placeholder="Paste your ZeroBounce key"
+              placeholder="Paste your ZeroBounce API key"
             />
             <a href="https://www.zerobounce.net/members/apikeys" target="_blank" rel="noopener noreferrer"
               className="text-xs text-indigo-600 hover:underline mt-1 inline-block">
@@ -119,13 +93,13 @@ export default function SettingsPage() {
             </a>
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Reoon API Key</label>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Reoon</label>
             <input
               type="password"
               className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 transition-colors"
               value={reoonKey}
               onChange={e => setReoonKey(e.target.value)}
-              placeholder="Paste your Reoon key"
+              placeholder="Paste your Reoon API key"
             />
             <a href="https://emailverifier.reoon.com/dashboard" target="_blank" rel="noopener noreferrer"
               className="text-xs text-indigo-600 hover:underline mt-1 inline-block">
@@ -136,7 +110,7 @@ export default function SettingsPage() {
 
         <button
           onClick={saveVerification}
-          disabled={saving || (provider === "zerobounce" && !zerobounceKey) || (provider === "reoon" && !reoonKey)}
+          disabled={saving}
           className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors"
         >
           {saving ? "Saving…" : saved ? "Saved!" : "Save"}
