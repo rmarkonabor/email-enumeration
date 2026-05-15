@@ -5,19 +5,11 @@ import { createClient } from "@/lib/supabase/client";
 
 export default function SettingsPage() {
   const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
   const [copied, setCopied] = useState(false);
-  const [urlSaved, setUrlSaved] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const supabase = createClient();
 
   useEffect(() => {
-    setBaseUrl(
-      localStorage.getItem("ef_base_url") ||
-      "https://verify1.mailcheckhq.com"
-    );
     loadApiKey();
   }, []);
 
@@ -56,28 +48,6 @@ export default function SettingsPage() {
     setRegenerating(false);
   }
 
-  function saveBaseUrl() {
-    localStorage.setItem("ef_base_url", baseUrl.trim().replace(/\/$/, ""));
-    setUrlSaved(true);
-    setTimeout(() => setUrlSaved(false), 2000);
-  }
-
-  async function testConnection() {
-    setTesting(true);
-    setTestResult(null);
-    const url = (baseUrl.trim().replace(/\/$/, "") || localStorage.getItem("ef_base_url") || "");
-    try {
-      const res = await fetch(`${url}/health`);
-      setTestResult(res.ok
-        ? { ok: true, message: "Connected successfully." }
-        : { ok: false, message: `Server returned HTTP ${res.status}` });
-    } catch (e: unknown) {
-      setTestResult({ ok: false, message: e instanceof Error ? e.message : "Connection failed" });
-    } finally {
-      setTesting(false);
-    }
-  }
-
   return (
     <div className="max-w-lg">
       <h1 className="text-2xl font-bold mb-1">Settings</h1>
@@ -114,38 +84,6 @@ export default function SettingsPage() {
             {regenerating ? "Regenerating…" : "Regenerate key"}
           </button>
           <p className="text-xs text-gray-400 mt-1">Invalidates your current key immediately.</p>
-        </div>
-
-        <div className="pt-4 border-t border-gray-100 space-y-3">
-          <div>
-            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">API Server URL</label>
-            <div className="flex gap-2">
-              <input
-                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 transition-colors"
-                value={baseUrl}
-                onChange={e => setBaseUrl(e.target.value)}
-                placeholder="https://verify1.mailcheckhq.com"
-              />
-              <button
-                onClick={saveBaseUrl}
-                className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors"
-              >
-                {urlSaved ? "Saved!" : "Save"}
-              </button>
-            </div>
-          </div>
-          <button
-            onClick={testConnection}
-            disabled={testing}
-            className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-50 transition-colors"
-          >
-            {testing ? "Testing…" : "Test connection"}
-          </button>
-          {testResult && (
-            <div className={`px-4 py-3 rounded-lg text-sm ${testResult.ok ? "bg-green-50 border border-green-200 text-green-700" : "bg-red-50 border border-red-200 text-red-700"}`}>
-              {testResult.message}
-            </div>
-          )}
         </div>
       </div>
     </div>
