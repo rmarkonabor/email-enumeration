@@ -35,22 +35,28 @@ async def verify_zerobounce(email: str, api_key: str) -> str:
 
 
 async def verify_reoon(email: str, api_key: str) -> str:
-    """Returns 'verified', 'not_found', 'catch_all', or 'unknown'."""
+    """Returns 'verified', 'not_found', 'catch_all', or 'unknown'.
+
+    Reoon power-mode response 'status' values:
+      safe | invalid | catch_all | risky | unknown | disposable |
+      role_account | mailbox_full | disabled | spamtrap
+    """
     try:
         async with httpx.AsyncClient() as client:
             r = await client.get(
                 _REOON_URL,
                 params={"email": email, "key": api_key, "mode": "power"},
-                timeout=15,
+                timeout=30,
             )
             r.raise_for_status()
             data = r.json()
-        status = data.get("status", "").lower()
-        if status == "valid":
+        status = (data.get("status") or "").lower()
+        logger.info("Reoon %s -> %s", email, status or data)
+        if status == "safe":
             return "verified"
-        if status in ("invalid", "disposable", "spamtrap"):
+        if status in ("invalid", "disposable", "spamtrap", "disabled"):
             return "not_found"
-        if data.get("is_catch_all"):
+        if status == "catch_all" or data.get("is_catch_all") or data.get("is_catchall"):
             return "catch_all"
         return "unknown"
     except Exception as e:
