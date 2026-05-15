@@ -15,11 +15,13 @@ type ProgressEvent =
   | { type: "done" } & FindResponse
   | { type: "error"; message: string };
 
-function getConfig(): { baseUrl: string; apiKey: string } {
-  if (typeof window === "undefined") return { baseUrl: "", apiKey: "" };
+function getConfig(): { baseUrl: string; apiKey: string; verifyProvider: string; verifyKey: string } {
+  if (typeof window === "undefined") return { baseUrl: "", apiKey: "", verifyProvider: "smtp", verifyKey: "" };
   return {
-    baseUrl: localStorage.getItem("ef_base_url") || "http://localhost:8000",
+    baseUrl: localStorage.getItem("ef_base_url") || "https://verify1.mailcheckhq.com",
     apiKey: localStorage.getItem("ef_api_key") || "",
+    verifyProvider: localStorage.getItem("ef_verify_provider") || "smtp",
+    verifyKey: localStorage.getItem("ef_verify_key") || "",
   };
 }
 
