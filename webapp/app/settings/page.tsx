@@ -66,43 +66,43 @@ export default function SettingsPage() {
   return (
     <div className="max-w-lg space-y-6">
       <div>
-        <h1 className="text-2xl font-bold mb-1">Settings</h1>
-        <p className="text-gray-500 text-sm">Your account and verification configuration.</p>
+        <h1 className="text-2xl font-bold text-slate-900 mb-1">Settings</h1>
+        <p className="text-slate-400 text-sm">Your account and verification configuration.</p>
       </div>
 
-      {/* Email Verification API */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+      {/* Verification API Keys */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
         <div>
-          <h2 className="font-semibold text-sm">Email Verification API</h2>
-          <p className="text-xs text-gray-400 mt-0.5">Save your provider keys here. Pick which one to use on the Single or Batch page.</p>
+          <h2 className="font-semibold text-sm text-slate-900">Email Verification API</h2>
+          <p className="text-xs text-slate-400 mt-0.5">Save your provider keys here. Pick which one to use on the Single or Batch page.</p>
         </div>
 
-        <div className="space-y-3">
+        <div className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">ZeroBounce</label>
+            <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">ZeroBounce</label>
             <input
               type="password"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 transition-colors"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all"
               value={zerobounceKey}
               onChange={e => setZerobounceKey(e.target.value)}
               placeholder="Paste your ZeroBounce API key"
             />
             <a href="https://www.zerobounce.net/members/apikeys" target="_blank" rel="noopener noreferrer"
-              className="text-xs text-indigo-600 hover:underline mt-1 inline-block">
+              className="text-xs text-blue-600 hover:underline mt-1 inline-block">
               Get your ZeroBounce API key →
             </a>
           </div>
           <div>
-            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Reoon</label>
+            <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Reoon</label>
             <input
               type="password"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 transition-colors"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all"
               value={reoonKey}
               onChange={e => setReoonKey(e.target.value)}
               placeholder="Paste your Reoon API key"
             />
             <a href="https://emailverifier.reoon.com/dashboard" target="_blank" rel="noopener noreferrer"
-              className="text-xs text-indigo-600 hover:underline mt-1 inline-block">
+              className="text-xs text-blue-600 hover:underline mt-1 inline-block">
               Get your Reoon API key →
             </a>
           </div>
@@ -111,43 +111,43 @@ export default function SettingsPage() {
         <button
           onClick={saveVerification}
           disabled={saving}
-          className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+          className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition-colors"
         >
           {saving ? "Saving…" : saved ? "Saved!" : "Save"}
         </button>
       </div>
 
-      {/* API key */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
-        <h2 className="font-semibold text-sm">Your API Key</h2>
+      {/* API Key */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
+        <h2 className="font-semibold text-sm text-slate-900">Your API Key</h2>
         <div>
           <div className="flex gap-2">
             <input
               readOnly
               type="password"
-              className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono bg-gray-50 outline-none"
+              className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono bg-slate-50 outline-none text-slate-700"
               value={apiKey}
               placeholder="Loading…"
             />
             <button
               onClick={copy}
               disabled={!apiKey}
-              className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:opacity-40 transition-colors"
+              className="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40 transition-colors"
             >
               {copied ? "Copied!" : "Copy"}
             </button>
           </div>
-          <p className="text-xs text-gray-400 mt-1">Use as <code>X-API-Key</code> header for external access.</p>
+          <p className="text-xs text-slate-400 mt-1.5">Use as <code className="bg-slate-100 px-1 py-0.5 rounded text-slate-600">X-API-Key</code> header for external access.</p>
         </div>
         <div>
           <button
             onClick={regenerate}
             disabled={regenerating}
-            className="px-4 py-2 border border-red-200 text-red-600 rounded-lg text-sm font-medium hover:bg-red-50 disabled:opacity-50 transition-colors"
+            className="px-4 py-2 border border-red-200 text-red-500 rounded-lg text-sm font-medium hover:bg-red-50 disabled:opacity-50 transition-colors"
           >
             {regenerating ? "Regenerating…" : "Regenerate key"}
           </button>
-          <p className="text-xs text-gray-400 mt-1">Invalidates your current key immediately.</p>
+          <p className="text-xs text-slate-400 mt-1.5">Invalidates your current key immediately.</p>
         </div>
       </div>
     </div>

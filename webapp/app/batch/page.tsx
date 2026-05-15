@@ -31,6 +31,8 @@ function getConfig(): { baseUrl: string; apiKey: string; verifyProvider: string;
   };
 }
 
+const inputCls = "w-full border border-slate-200 rounded px-2 py-1.5 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20 transition-all";
+
 function fmtSeconds(s: number) {
   if (s < 60) return `${Math.round(s)}s`;
   return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
@@ -206,24 +208,24 @@ export default function BatchPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
-        <h1 className="text-2xl font-bold">Batch / CSV lookup</h1>
+        <h1 className="text-2xl font-bold text-slate-900">Batch / CSV lookup</h1>
         <ProviderPicker />
       </div>
-      <p className="text-gray-500 text-sm mb-6">Upload a CSV or add rows manually. Max 50 contacts per run.</p>
+      <p className="text-slate-400 text-sm mb-6">Upload a CSV or add rows manually. Max 50 contacts per run.</p>
 
-      <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-6">
         <div className="flex items-center gap-3 mb-5">
-          <button onClick={() => fileRef.current?.click()} className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
+          <button onClick={() => fileRef.current?.click()} className="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors">
             Upload CSV
           </button>
-          <span className="text-xs text-gray-400">Columns: first_name, last_name, domain (middle_name optional)</span>
+          <span className="text-xs text-slate-400">Columns: first_name, last_name, domain (middle_name optional)</span>
           <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={handleFile} />
         </div>
 
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-xs font-semibold text-gray-500 uppercase tracking-wide border-b border-gray-100">
+              <tr className="text-xs font-semibold text-slate-400 uppercase tracking-wide border-b border-slate-100">
                 <th className="text-left pb-2 pr-2">First name</th>
                 <th className="text-left pb-2 pr-2">Last name</th>
                 <th className="text-left pb-2 pr-2">Domain</th>
@@ -237,7 +239,7 @@ export default function BatchPage() {
                   {(["first_name", "last_name", "domain", "middle_name"] as const).map(f => (
                     <td key={f} className="py-1 pr-2">
                       <input
-                        className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm outline-none focus:border-indigo-400"
+                        className={inputCls}
                         value={row[f] ?? ""}
                         onChange={e => updateRow(row._id, f, e.target.value)}
                         placeholder={f === "first_name" ? "Jamie" : f === "last_name" ? "Lee" : f === "domain" ? "notion.so" : ""}
@@ -245,7 +247,7 @@ export default function BatchPage() {
                     </td>
                   ))}
                   <td className="py-1">
-                    <button onClick={() => removeRow(row._id)} className="text-gray-300 hover:text-red-400 px-2 text-lg leading-none">×</button>
+                    <button onClick={() => removeRow(row._id)} className="text-slate-300 hover:text-red-400 px-2 text-lg leading-none transition-colors">×</button>
                   </td>
                 </tr>
               ))}
@@ -254,7 +256,7 @@ export default function BatchPage() {
         </div>
 
         <div className="flex gap-3 mt-4">
-          <button onClick={addRow} className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
+          <button onClick={addRow} className="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors">
             + Add row
           </button>
           {loading ? (
@@ -262,33 +264,33 @@ export default function BatchPage() {
               Stop
             </button>
           ) : (
-            <button onClick={handleRun} disabled={!validCount} className="px-6 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors">
+            <button onClick={handleRun} disabled={!validCount} className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition-colors">
               Run {validCount} contact{validCount !== 1 ? "s" : ""}
             </button>
           )}
         </div>
 
         {error && (
-          <div className="mt-3 bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm">{error}</div>
+          <div className="mt-3 bg-red-50 border border-red-200 text-red-600 rounded-lg px-4 py-3 text-sm">{error}</div>
         )}
       </div>
 
       {results.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-4">
-              <h2 className="font-semibold">
+              <h2 className="font-semibold text-slate-900">
                 Results{" "}
-                <span className="text-gray-400 font-normal text-sm">
+                <span className="text-slate-400 font-normal text-sm">
                   ({progress.done}/{progress.total})
                 </span>
               </h2>
               {loading && eta && (
-                <span className="text-xs text-gray-400">~{eta} remaining</span>
+                <span className="text-xs text-slate-400">~{eta} remaining</span>
               )}
             </div>
             {doneResults.length > 0 && (
-              <button onClick={exportCSV} className="px-4 py-1.5 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
+              <button onClick={exportCSV} className="px-4 py-1.5 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors">
                 Export CSV
               </button>
             )}
@@ -296,47 +298,47 @@ export default function BatchPage() {
 
           {loading && (
             <div className="mb-4">
-              <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+              <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-indigo-500 rounded-full transition-all duration-500"
+                  className="h-full bg-blue-500 rounded-full transition-all duration-500"
                   style={{ width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%` }}
                 />
               </div>
-              <p className="text-xs text-gray-400 mt-1">{progress.done} of {progress.total} complete</p>
+              <p className="text-xs text-slate-400 mt-1.5">{progress.done} of {progress.total} complete</p>
             </div>
           )}
 
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-xs font-semibold text-gray-500 uppercase tracking-wide border-b border-gray-100">
+                <tr className="text-xs font-semibold text-slate-400 uppercase tracking-wide border-b border-slate-100">
                   <th className="text-left pb-2 pr-4">Contact</th>
                   <th className="text-left pb-2 pr-4">Email found</th>
                   <th className="text-left pb-2 pr-4">Status</th>
                   <th className="text-left pb-2">Fallback?</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-50">
+              <tbody className="divide-y divide-slate-50">
                 {results.map(({ request: q, response: r, state }, i) => (
-                  <tr key={i} className={state === "running" ? "bg-indigo-50/40" : ""}>
-                    <td className="py-2 pr-4 text-gray-700">
+                  <tr key={i} className={state === "running" ? "bg-blue-50/40" : ""}>
+                    <td className="py-2.5 pr-4 text-slate-700">
                       {q.first_name} {q.last_name}
-                      <span className="text-gray-400"> · {q.domain}</span>
+                      <span className="text-slate-400"> · {q.domain}</span>
                     </td>
-                    <td className="py-2 pr-4 font-mono font-medium">
-                      {state === "pending" && <span className="text-gray-300">—</span>}
+                    <td className="py-2.5 pr-4 font-mono font-medium text-slate-800">
+                      {state === "pending" && <span className="text-slate-300">—</span>}
                       {state === "running" && (
-                        <span className="inline-flex items-center gap-1.5 text-indigo-500">
-                          <span className="w-2 h-2 rounded-full bg-indigo-400 animate-pulse inline-block" />
+                        <span className="inline-flex items-center gap-1.5 text-blue-500">
+                          <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse inline-block" />
                           verifying…
                         </span>
                       )}
-                      {state === "done" && (r.email ?? <span className="text-gray-300">—</span>)}
+                      {state === "done" && (r.email ?? <span className="text-slate-300">—</span>)}
                     </td>
-                    <td className="py-2 pr-4">
-                      {state === "done" ? <StatusBadge status={r.status} /> : <span className="text-gray-300">—</span>}
+                    <td className="py-2.5 pr-4">
+                      {state === "done" ? <StatusBadge status={r.status} /> : <span className="text-slate-300">—</span>}
                     </td>
-                    <td className="py-2 text-gray-500">
+                    <td className="py-2.5 text-slate-500">
                       {state === "done" ? (r.fallback_recommended ? "Yes" : "No") : "—"}
                     </td>
                   </tr>

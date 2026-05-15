@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 export default function NavBar() {
   const [email, setEmail] = useState<string | null>(null);
   const router = useRouter();
+  const pathname = usePathname();
   const supabase = createClient();
 
   useEffect(() => {
@@ -37,26 +38,44 @@ export default function NavBar() {
     router.refresh();
   }
 
+  const navLinks = [
+    { href: "/", label: "Single" },
+    { href: "/batch", label: "Batch" },
+    { href: "/history", label: "History" },
+    { href: "/settings", label: "Settings" },
+  ];
+
   return (
-    <nav className="bg-white border-b border-gray-200 px-6 py-4">
-      <div className="max-w-5xl mx-auto flex items-center justify-between">
-        <Link href="/" className="font-bold text-lg tracking-tight">Email Finder</Link>
-        <div className="flex items-center gap-6">
-          <div className="flex gap-6 text-sm font-medium text-gray-600">
-            <Link href="/" className="hover:text-gray-900">Single</Link>
-            <Link href="/batch" className="hover:text-gray-900">Batch / CSV</Link>
-            <Link href="/history" className="hover:text-gray-900">History</Link>
-            <Link href="/settings" className="hover:text-gray-900">Settings</Link>
+    <nav className="bg-slate-900 border-b border-slate-800">
+      <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
+        <div className="flex items-center gap-8">
+          <Link href="/" className="text-white font-bold text-sm tracking-tight">
+            EmailFinder
+          </Link>
+          <div className="flex items-center gap-1">
+            {navLinks.map(link => (
+              <Link
+                key={link.href}
+                href={link.href}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  pathname === link.href
+                    ? "bg-blue-600 text-white"
+                    : "text-slate-400 hover:text-white hover:bg-slate-800"
+                }`}
+              >
+                {link.label}
+              </Link>
+            ))}
           </div>
-          <div className="flex items-center gap-3 pl-6 border-l border-gray-200">
-            {email && <span className="text-xs text-gray-400 hidden sm:block">{email}</span>}
-            <button
-              onClick={signOut}
-              className="text-xs text-gray-500 hover:text-gray-800 border border-gray-200 rounded px-2.5 py-1 hover:bg-gray-50 transition-colors"
-            >
-              Sign out
-            </button>
-          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          {email && <span className="text-xs text-slate-500 hidden sm:block">{email}</span>}
+          <button
+            onClick={signOut}
+            className="text-xs text-slate-400 hover:text-white border border-slate-700 hover:border-slate-600 rounded-md px-3 py-1.5 transition-colors"
+          >
+            Sign out
+          </button>
         </div>
       </div>
     </nav>

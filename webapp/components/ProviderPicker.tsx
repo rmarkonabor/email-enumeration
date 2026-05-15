@@ -30,8 +30,8 @@ export default function ProviderPicker() {
 
   return (
     <div className="flex items-center gap-2">
-      <span className="text-xs text-gray-400 font-medium">Verify via</span>
-      <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
+      <span className="text-xs text-slate-400 font-medium">Verify via</span>
+      <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium bg-white">
         {OPTIONS.map(o => (
           <button
             key={o.id}
@@ -39,8 +39,8 @@ export default function ProviderPicker() {
             onClick={() => switchProvider(o.id)}
             className={`px-3 py-1.5 transition-colors ${
               provider === o.id
-                ? "bg-indigo-600 text-white"
-                : "bg-white text-gray-500 hover:bg-gray-50"
+                ? "bg-blue-600 text-white"
+                : "text-slate-500 hover:bg-slate-50"
             }`}
           >
             {o.label}

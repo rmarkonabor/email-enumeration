@@ -3,7 +3,6 @@
 import { useState, useRef } from "react";
 import { addHistory, type FindRequest, type FindResponse } from "@/lib/api";
 import ResultCard from "@/components/ResultCard";
-import StatusBadge from "@/components/StatusBadge";
 import ProviderPicker from "@/components/ProviderPicker";
 
 type ProgressEvent =
@@ -105,12 +104,12 @@ export default function SinglePage() {
   return (
     <div className="max-w-xl">
       <div className="flex items-center justify-between mb-1">
-        <h1 className="text-2xl font-bold">Single lookup</h1>
+        <h1 className="text-2xl font-bold text-slate-900">Single lookup</h1>
         <ProviderPicker />
       </div>
-      <p className="text-gray-500 text-sm mb-6">Find a verified email for one contact.</p>
+      <p className="text-slate-400 text-sm mb-6">Find a verified email for one contact.</p>
 
-      <form onSubmit={handleSubmit} className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
+      <form onSubmit={handleSubmit} className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <Field label="First name">
             <input
@@ -152,24 +151,24 @@ export default function SinglePage() {
         <button
           type="submit"
           disabled={loading}
-          className="w-full py-2.5 bg-indigo-600 text-white rounded-lg font-semibold text-sm hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+          className="w-full py-2.5 bg-blue-600 text-white rounded-lg font-semibold text-sm hover:bg-blue-700 disabled:opacity-50 transition-colors"
         >
           {loading ? "Searching…" : "Find email"}
         </button>
       </form>
 
       {error && (
-        <div className="mt-4 bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm">{error}</div>
+        <div className="mt-4 bg-red-50 border border-red-200 text-red-600 rounded-lg px-4 py-3 text-sm">{error}</div>
       )}
 
       {(loading || events.length > 0) && !result && (
-        <div className="mt-4 bg-white rounded-xl border border-gray-200 p-4">
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Live progress</p>
+        <div className="mt-4 bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Live progress</p>
           <div className="space-y-1.5 text-sm font-mono">
             {events.map((ev, i) => <ProgressRow key={i} event={ev} />)}
             {loading && (
-              <div className="flex items-center gap-2 text-gray-400">
-                <span className="inline-block w-2 h-2 rounded-full bg-indigo-400 animate-pulse" />
+              <div className="flex items-center gap-2 text-slate-400">
+                <span className="inline-block w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
                 <span>Working…</span>
               </div>
             )}
@@ -189,7 +188,7 @@ export default function SinglePage() {
 function ProgressRow({ event }: { event: ProgressEvent }) {
   if (event.type === "status") {
     return (
-      <div className="flex items-center gap-2 text-gray-500">
+      <div className="flex items-center gap-2 text-slate-400">
         <span>⟳</span>
         <span>{event.message}</span>
       </div>
@@ -199,7 +198,7 @@ function ProgressRow({ event }: { event: ProgressEvent }) {
     return (
       <div className="flex items-center gap-2">
         <span>{event.catch_all ? "✗" : "✓"}</span>
-        <span className={event.catch_all ? "text-yellow-600" : "text-green-600"}>
+        <span className={event.catch_all ? "text-amber-600" : "text-emerald-600"}>
           Catch-all: {event.catch_all ? "yes (domain accepts all)" : "no"}
           {event.cached ? " (cached)" : ""}
         </span>
@@ -208,21 +207,21 @@ function ProgressRow({ event }: { event: ProgressEvent }) {
   }
   if (event.type === "candidates") {
     return (
-      <div className="text-gray-500">
+      <div className="text-slate-400">
         → {event.count} candidates to try
       </div>
     );
   }
   if (event.type === "trying") {
     return (
-      <div className="text-gray-400">
+      <div className="text-slate-300">
         ↳ {event.email}
       </div>
     );
   }
   if (event.type === "attempt") {
     const icon = event.status === "verified" ? "✓" : "✗";
-    const cls = event.status === "verified" ? "text-green-600 font-semibold" : "text-red-500";
+    const cls = event.status === "verified" ? "text-emerald-600 font-semibold" : "text-red-400";
     return (
       <div className={`flex items-center gap-2 ${cls}`}>
         <span>{icon}</span>
@@ -236,12 +235,12 @@ function ProgressRow({ event }: { event: ProgressEvent }) {
   return null;
 }
 
-const inputCls = "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 transition-colors";
+const inputCls = "w-full border border-slate-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">{label}</label>
+      <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">{label}</label>
       {children}
     </div>
   );
