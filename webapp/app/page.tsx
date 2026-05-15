@@ -4,6 +4,7 @@ import { useState, useRef } from "react";
 import { addHistory, type FindRequest, type FindResponse } from "@/lib/api";
 import ResultCard from "@/components/ResultCard";
 import StatusBadge from "@/components/StatusBadge";
+import ProviderPicker from "@/components/ProviderPicker";
 
 type ProgressEvent =
   | { type: "status"; message: string }
@@ -99,7 +100,10 @@ export default function SinglePage() {
 
   return (
     <div className="max-w-xl">
-      <h1 className="text-2xl font-bold mb-1">Single lookup</h1>
+      <div className="flex items-center justify-between mb-1">
+        <h1 className="text-2xl font-bold">Single lookup</h1>
+        <ProviderPicker />
+      </div>
       <p className="text-gray-500 text-sm mb-6">Find a verified email for one contact.</p>
 
       <form onSubmit={handleSubmit} className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">

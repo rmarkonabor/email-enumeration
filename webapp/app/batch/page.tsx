@@ -3,6 +3,7 @@
 import { useState, useRef } from "react";
 import { addHistory, type FindRequest, type FindResponse } from "@/lib/api";
 import StatusBadge from "@/components/StatusBadge";
+import ProviderPicker from "@/components/ProviderPicker";
 
 interface Row extends FindRequest {
   _id: number;
@@ -201,7 +202,10 @@ export default function BatchPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-1">Batch / CSV lookup</h1>
+      <div className="flex items-center justify-between mb-1">
+        <h1 className="text-2xl font-bold">Batch / CSV lookup</h1>
+        <ProviderPicker />
+      </div>
       <p className="text-gray-500 text-sm mb-6">Upload a CSV or add rows manually. Max 50 contacts per run.</p>
 
       <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
