@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
@@ -51,7 +50,7 @@ export default function NavBar() {
       <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
         <div className="flex items-center gap-8">
           <Link href="/" className="flex items-center gap-2">
-            <Image src="/logo.svg" alt="Email Finder" width={28} height={28} priority />
+            <img src="/logo.svg" alt="Email Finder" width={28} height={28} />
             <span className="text-white font-bold text-sm tracking-tight">Email Finder</span>
           </Link>
           <div className="flex items-center gap-1">

@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import Image from "next/image";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 
@@ -45,7 +44,7 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center mb-4">
-            <Image src="/logo.svg" alt="Email Finder" width={72} height={72} priority />
+            <img src="/logo.svg" alt="Email Finder" width={72} height={72} />
           </div>
           <h1 className="text-xl font-bold text-white tracking-tight">Email Finder</h1>
           <p className="text-slate-400 text-sm mt-1">
