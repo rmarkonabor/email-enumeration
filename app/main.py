@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from .auth import is_valid_key
 from .cache import Cache
 from .smtp_verifier import SMTPVerifier
 from .verifier import EmailFinder
@@ -84,13 +85,8 @@ app.add_middleware(
 
 
 # ----- Auth dependency -----
-def require_api_key(x_api_key: str = Header(default="")) -> None:
-    if not API_KEY:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="API_KEY not configured on server",
-        )
-    if x_api_key != API_KEY:
+async def require_api_key(x_api_key: str = Header(default="")) -> None:
+    if not await is_valid_key(x_api_key):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing X-API-Key header",
@@ -186,9 +182,7 @@ async def find_stream(
     middle_name: str | None = Query(default=None),
     api_key: str = Query(default=""),
 ) -> StreamingResponse:
-    if not API_KEY:
-        raise HTTPException(status_code=500, detail="API_KEY not configured on server")
-    if api_key != API_KEY:
+    if not await is_valid_key(api_key):
         raise HTTPException(status_code=401, detail="Invalid or missing api_key")
 
     finder: EmailFinder = app.state.finder
