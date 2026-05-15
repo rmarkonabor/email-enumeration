@@ -205,6 +205,36 @@ async def find_stream(
 
 
 @app.post(
+    "/find/batch/stream",
+    dependencies=[Depends(require_api_key)],
+    summary="Stream live progress for a batch lookup (SSE)",
+)
+async def find_batch_stream(req: BatchRequest) -> StreamingResponse:
+    finder: EmailFinder = app.state.finder
+
+    async def event_gen():
+        total = len(req.contacts)
+        yield f"data: {json.dumps({'type': 'start', 'total': total})}\n\n"
+        for i, contact in enumerate(req.contacts):
+            yield f"data: {json.dumps({'type': 'contact_start', 'index': i, 'name': f'{contact.first_name} {contact.last_name}', 'domain': contact.domain})}\n\n"
+            try:
+                result = await finder.find(
+                    first_name=contact.first_name,
+                    last_name=contact.last_name,
+                    domain=contact.domain,
+                    middle_name=contact.middle_name,
+                )
+                resp = _to_response(result, False)
+                yield f"data: {json.dumps({'type': 'contact_done', 'index': i, **resp.model_dump()})}\n\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'contact_done', 'index': i, 'email': None, 'status': 'error', 'catch_all': False, 'candidates_tried': 0, 'message': str(e), 'fallback_recommended': False})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'total': total})}\n\n"
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post(
     "/find/batch",
     response_model=BatchResponse,
     dependencies=[Depends(require_api_key)],

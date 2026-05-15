@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { findBatch, addHistory, type FindRequest, type FindResponse } from "@/lib/api";
+import { addHistory, type FindRequest, type FindResponse } from "@/lib/api";
 import StatusBadge from "@/components/StatusBadge";
 
 interface Row extends FindRequest {
@@ -11,12 +11,25 @@ interface Row extends FindRequest {
 interface ResultRow {
   request: FindRequest;
   response: FindResponse;
+  state: "pending" | "running" | "done";
 }
 
 let rowCounter = 0;
-
 function newRow(): Row {
   return { _id: ++rowCounter, first_name: "", last_name: "", domain: "", middle_name: "" };
+}
+
+function getConfig(): { baseUrl: string; apiKey: string } {
+  if (typeof window === "undefined") return { baseUrl: "", apiKey: "" };
+  return {
+    baseUrl: localStorage.getItem("ef_base_url") || "http://localhost:8000",
+    apiKey: localStorage.getItem("ef_api_key") || "",
+  };
+}
+
+function fmtSeconds(s: number) {
+  if (s < 60) return `${Math.round(s)}s`;
+  return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
 }
 
 export default function BatchPage() {
@@ -24,19 +37,17 @@ export default function BatchPage() {
   const [results, setResults] = useState<ResultRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState({ done: 0, total: 0 });
+  const [eta, setEta] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const startTimeRef = useRef<number>(0);
 
   function updateRow(id: number, field: keyof FindRequest, value: string) {
     setRows(rs => rs.map(r => r._id === id ? { ...r, [field]: value } : r));
   }
-
-  function addRow() {
-    setRows(rs => [...rs, newRow()]);
-  }
-
-  function removeRow(id: number) {
-    setRows(rs => rs.filter(r => r._id !== id));
-  }
+  function addRow() { setRows(rs => [...rs, newRow()]); }
+  function removeRow(id: number) { setRows(rs => rs.filter(r => r._id !== id)); }
 
   function parseCSV(text: string): Row[] {
     const lines = text.trim().split(/\r?\n/);
@@ -61,10 +72,7 @@ export default function BatchPage() {
     const reader = new FileReader();
     reader.onload = ev => {
       const parsed = parseCSV(ev.target?.result as string);
-      if (parsed.length === 0) {
-        setError("No valid rows found. CSV must have columns: first_name, last_name, domain");
-        return;
-      }
+      if (!parsed.length) { setError("No valid rows found. CSV must have: first_name, last_name, domain"); return; }
       setRows(parsed.slice(0, 50));
       setError(null);
     };
@@ -72,43 +80,124 @@ export default function BatchPage() {
     e.target.value = "";
   }
 
+  function handleStop() {
+    abortRef.current?.abort();
+    setLoading(false);
+  }
+
   async function handleRun() {
     const valid = rows.filter(r => r.first_name.trim() && r.last_name.trim() && r.domain.trim());
     if (!valid.length) { setError("Add at least one complete row."); return; }
+
+    abortRef.current?.abort();
+    const abort = new AbortController();
+    abortRef.current = abort;
+
     setLoading(true);
     setError(null);
-    setResults([]);
+    setProgress({ done: 0, total: valid.length });
+    setEta(null);
+    startTimeRef.current = Date.now();
+
+    const contacts: FindRequest[] = valid.map(({ _id, ...rest }) => ({
+      ...rest,
+      first_name: rest.first_name.trim(),
+      last_name: rest.last_name.trim(),
+      domain: rest.domain.trim(),
+    }));
+
+    const initialResults: ResultRow[] = contacts.map(req => ({
+      request: req,
+      response: {} as FindResponse,
+      state: "pending",
+    }));
+    setResults(initialResults);
+
+    const { baseUrl, apiKey } = getConfig();
+
     try {
-      const contacts: FindRequest[] = valid.map(({ _id, ...rest }) => ({
-        ...rest,
-        first_name: rest.first_name.trim(),
-        last_name: rest.last_name.trim(),
-        domain: rest.domain.trim(),
-      }));
-      const res = await findBatch(contacts);
-      const paired: ResultRow[] = contacts.map((req, i) => ({ request: req, response: res.results[i] }));
-      setResults(paired);
-      paired.forEach(({ request, response }) => addHistory(request, response));
+      const res = await fetch(`${baseUrl}/find/batch/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+        body: JSON.stringify({ contacts }),
+        signal: abort.signal,
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || `HTTP ${res.status}`);
+      }
+
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const event = JSON.parse(line.slice(6));
+
+          if (event.type === "contact_start") {
+            setResults(prev => prev.map((r, i) => i === event.index ? { ...r, state: "running" } : r));
+          } else if (event.type === "contact_done") {
+            const response: FindResponse = {
+              email: event.email,
+              status: event.status,
+              catch_all: event.catch_all,
+              candidates_tried: event.candidates_tried,
+              message: event.message,
+              fallback_recommended: event.fallback_recommended,
+            };
+            setResults(prev => {
+              const updated = prev.map((r, i) =>
+                i === event.index ? { ...r, response, state: "done" as const } : r
+              );
+              return updated;
+            });
+            addHistory(contacts[event.index], response);
+
+            setProgress(p => {
+              const done = p.done + 1;
+              const elapsed = (Date.now() - startTimeRef.current) / 1000;
+              const avgPerContact = elapsed / done;
+              const remaining = (p.total - done) * avgPerContact;
+              setEta(done < p.total ? fmtSeconds(remaining) : null);
+              return { ...p, done };
+            });
+          } else if (event.type === "done") {
+            setLoading(false);
+            setEta(null);
+          }
+        }
+      }
     } catch (e: unknown) {
+      if ((e as Error).name === "AbortError") return;
       setError(e instanceof Error ? e.message : "Request failed");
-    } finally {
       setLoading(false);
     }
   }
 
   function exportCSV() {
+    const done = results.filter(r => r.state === "done");
     const header = "first_name,last_name,domain,email,status,fallback_recommended";
-    const lines = results.map(({ request: q, response: r }) =>
+    const lines = done.map(({ request: q, response: r }) =>
       [q.first_name, q.last_name, q.domain, r.email ?? "", r.status, r.fallback_recommended].join(",")
     );
     const blob = new Blob([[header, ...lines].join("\n")], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
+    a.href = URL.createObjectURL(blob);
     a.download = "email-finder-results.csv";
     a.click();
-    URL.revokeObjectURL(url);
   }
+
+  const validCount = rows.filter(r => r.first_name && r.last_name && r.domain).length;
+  const doneResults = results.filter(r => r.state === "done");
 
   return (
     <div>
@@ -117,10 +206,7 @@ export default function BatchPage() {
 
       <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
         <div className="flex items-center gap-3 mb-5">
-          <button
-            onClick={() => fileRef.current?.click()}
-            className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
-          >
+          <button onClick={() => fileRef.current?.click()} className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
             Upload CSV
           </button>
           <span className="text-xs text-gray-400">Columns: first_name, last_name, domain (middle_name optional)</span>
@@ -164,13 +250,15 @@ export default function BatchPage() {
           <button onClick={addRow} className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
             + Add row
           </button>
-          <button
-            onClick={handleRun}
-            disabled={loading}
-            className="px-6 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-          >
-            {loading ? "Running…" : `Run ${rows.filter(r => r.first_name && r.last_name && r.domain).length} contacts`}
-          </button>
+          {loading ? (
+            <button onClick={handleStop} className="px-6 py-2 bg-red-500 text-white rounded-lg text-sm font-semibold hover:bg-red-600 transition-colors">
+              Stop
+            </button>
+          ) : (
+            <button onClick={handleRun} disabled={!validCount} className="px-6 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 transition-colors">
+              Run {validCount} contact{validCount !== 1 ? "s" : ""}
+            </button>
+          )}
         </div>
 
         {error && (
@@ -181,11 +269,36 @@ export default function BatchPage() {
       {results.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold">Results <span className="text-gray-400 font-normal text-sm">({results.length})</span></h2>
-            <button onClick={exportCSV} className="px-4 py-1.5 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
-              Export CSV
-            </button>
+            <div className="flex items-center gap-4">
+              <h2 className="font-semibold">
+                Results{" "}
+                <span className="text-gray-400 font-normal text-sm">
+                  ({progress.done}/{progress.total})
+                </span>
+              </h2>
+              {loading && eta && (
+                <span className="text-xs text-gray-400">~{eta} remaining</span>
+              )}
+            </div>
+            {doneResults.length > 0 && (
+              <button onClick={exportCSV} className="px-4 py-1.5 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
+                Export CSV
+              </button>
+            )}
           </div>
+
+          {loading && (
+            <div className="mb-4">
+              <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-indigo-500 rounded-full transition-all duration-500"
+                  style={{ width: `${progress.total ? (progress.done / progress.total) * 100 : 0}%` }}
+                />
+              </div>
+              <p className="text-xs text-gray-400 mt-1">{progress.done} of {progress.total} complete</p>
+            </div>
+          )}
+
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -197,12 +310,28 @@ export default function BatchPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50">
-                {results.map(({ request: q, response: r }, i) => (
-                  <tr key={i}>
-                    <td className="py-2 pr-4 text-gray-700">{q.first_name} {q.last_name} · <span className="text-gray-400">{q.domain}</span></td>
-                    <td className="py-2 pr-4 font-mono font-medium">{r.email ?? <span className="text-gray-300">—</span>}</td>
-                    <td className="py-2 pr-4"><StatusBadge status={r.status} /></td>
-                    <td className="py-2 text-gray-500">{r.fallback_recommended ? "Yes" : "No"}</td>
+                {results.map(({ request: q, response: r, state }, i) => (
+                  <tr key={i} className={state === "running" ? "bg-indigo-50/40" : ""}>
+                    <td className="py-2 pr-4 text-gray-700">
+                      {q.first_name} {q.last_name}
+                      <span className="text-gray-400"> · {q.domain}</span>
+                    </td>
+                    <td className="py-2 pr-4 font-mono font-medium">
+                      {state === "pending" && <span className="text-gray-300">—</span>}
+                      {state === "running" && (
+                        <span className="inline-flex items-center gap-1.5 text-indigo-500">
+                          <span className="w-2 h-2 rounded-full bg-indigo-400 animate-pulse inline-block" />
+                          verifying…
+                        </span>
+                      )}
+                      {state === "done" && (r.email ?? <span className="text-gray-300">—</span>)}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {state === "done" ? <StatusBadge status={r.status} /> : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="py-2 text-gray-500">
+                      {state === "done" ? (r.fallback_recommended ? "Yes" : "No") : "—"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
