@@ -11,13 +11,15 @@ Auth: pass X-API-Key header matching the API_KEY env var.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from .cache import Cache
@@ -171,6 +173,35 @@ async def find(req: FindRequest) -> FindResponse:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return _to_response(result, req.return_attempts)
+
+
+@app.get(
+    "/find/stream",
+    summary="Stream live progress for a single email lookup (SSE)",
+)
+async def find_stream(
+    first_name: str = Query(...),
+    last_name: str = Query(...),
+    domain: str = Query(...),
+    middle_name: str | None = Query(default=None),
+    api_key: str = Query(default=""),
+) -> StreamingResponse:
+    if not API_KEY:
+        raise HTTPException(status_code=500, detail="API_KEY not configured on server")
+    if api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing api_key")
+
+    finder: EmailFinder = app.state.finder
+
+    async def event_gen():
+        try:
+            async for event in finder.find_stream(first_name, last_name, domain, middle_name):
+                yield f"data: {json.dumps(event)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.post(

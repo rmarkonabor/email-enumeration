@@ -1,9 +1,26 @@
 "use client";
 
-import { useState } from "react";
-import { findEmail, addHistory, type FindRequest, type FindResponse } from "@/lib/api";
-import StatusBadge from "@/components/StatusBadge";
+import { useState, useRef } from "react";
+import { addHistory, type FindRequest, type FindResponse } from "@/lib/api";
 import ResultCard from "@/components/ResultCard";
+import StatusBadge from "@/components/StatusBadge";
+
+type ProgressEvent =
+  | { type: "status"; message: string }
+  | { type: "catch_all"; catch_all: boolean; cached: boolean }
+  | { type: "candidates"; count: number }
+  | { type: "trying"; email: string }
+  | { type: "attempt"; email: string; status: string; code?: number; cached?: boolean }
+  | { type: "done" } & FindResponse
+  | { type: "error"; message: string };
+
+function getConfig(): { baseUrl: string; apiKey: string } {
+  if (typeof window === "undefined") return { baseUrl: "", apiKey: "" };
+  return {
+    baseUrl: localStorage.getItem("ef_base_url") || "http://localhost:8000",
+    apiKey: localStorage.getItem("ef_api_key") || "",
+  };
+}
 
 export default function SinglePage() {
   const [form, setForm] = useState<FindRequest>({
@@ -14,30 +31,68 @@ export default function SinglePage() {
     return_attempts: false,
   });
   const [loading, setLoading] = useState(false);
+  const [events, setEvents] = useState<ProgressEvent[]>([]);
   const [result, setResult] = useState<FindResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const esRef = useRef<EventSource | null>(null);
 
-  async function handleSubmit(e: React.FormEvent) {
+  function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (esRef.current) esRef.current.close();
+
     setLoading(true);
     setResult(null);
     setError(null);
-    try {
-      const req: FindRequest = {
-        first_name: form.first_name.trim(),
-        last_name: form.last_name.trim(),
-        domain: form.domain.trim(),
-        return_attempts: form.return_attempts,
-      };
-      if (form.middle_name?.trim()) req.middle_name = form.middle_name.trim();
-      const res = await findEmail(req);
-      setResult(res);
-      addHistory(req, res);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Request failed");
-    } finally {
+    setEvents([]);
+
+    const { baseUrl, apiKey } = getConfig();
+    const params = new URLSearchParams({
+      first_name: form.first_name.trim(),
+      last_name: form.last_name.trim(),
+      domain: form.domain.trim(),
+      api_key: apiKey,
+    });
+    if (form.middle_name?.trim()) params.set("middle_name", form.middle_name.trim());
+
+    const es = new EventSource(`${baseUrl}/find/stream?${params}`);
+    esRef.current = es;
+
+    es.onmessage = (e) => {
+      const event: ProgressEvent = JSON.parse(e.data);
+      setEvents(prev => [...prev, event]);
+      if (event.type === "done") {
+        const res: FindResponse = {
+          email: event.email,
+          status: event.status,
+          catch_all: event.catch_all,
+          candidates_tried: event.candidates_tried,
+          attempts: event.attempts,
+          message: event.message,
+          fallback_recommended: event.fallback_recommended,
+        };
+        setResult(res);
+        const req: FindRequest = {
+          first_name: form.first_name.trim(),
+          last_name: form.last_name.trim(),
+          domain: form.domain.trim(),
+          return_attempts: true,
+        };
+        if (form.middle_name?.trim()) req.middle_name = form.middle_name.trim();
+        addHistory(req, res);
+        es.close();
+        setLoading(false);
+      } else if (event.type === "error") {
+        setError(event.message);
+        es.close();
+        setLoading(false);
+      }
+    };
+
+    es.onerror = () => {
+      setError("Connection failed. Check your API Base URL and API Key in Settings.");
+      es.close();
       setLoading(false);
-    }
+    };
   }
 
   return (
@@ -84,14 +139,6 @@ export default function SinglePage() {
             />
           </Field>
         </div>
-        <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={form.return_attempts}
-            onChange={e => setForm(f => ({ ...f, return_attempts: e.target.checked }))}
-          />
-          Show all SMTP attempts (debug)
-        </label>
         <button
           type="submit"
           disabled={loading}
@@ -105,6 +152,21 @@ export default function SinglePage() {
         <div className="mt-4 bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm">{error}</div>
       )}
 
+      {(loading || events.length > 0) && !result && (
+        <div className="mt-4 bg-white rounded-xl border border-gray-200 p-4">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Live progress</p>
+          <div className="space-y-1.5 text-sm font-mono">
+            {events.map((ev, i) => <ProgressRow key={i} event={ev} />)}
+            {loading && (
+              <div className="flex items-center gap-2 text-gray-400">
+                <span className="inline-block w-2 h-2 rounded-full bg-indigo-400 animate-pulse" />
+                <span>Working…</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {result && (
         <div className="mt-4">
           <ResultCard result={result} request={form} />
@@ -112,6 +174,56 @@ export default function SinglePage() {
       )}
     </div>
   );
+}
+
+function ProgressRow({ event }: { event: ProgressEvent }) {
+  if (event.type === "status") {
+    return (
+      <div className="flex items-center gap-2 text-gray-500">
+        <span>⟳</span>
+        <span>{event.message}</span>
+      </div>
+    );
+  }
+  if (event.type === "catch_all") {
+    return (
+      <div className="flex items-center gap-2">
+        <span>{event.catch_all ? "✗" : "✓"}</span>
+        <span className={event.catch_all ? "text-yellow-600" : "text-green-600"}>
+          Catch-all: {event.catch_all ? "yes (domain accepts all)" : "no"}
+          {event.cached ? " (cached)" : ""}
+        </span>
+      </div>
+    );
+  }
+  if (event.type === "candidates") {
+    return (
+      <div className="text-gray-500">
+        → {event.count} candidates to try
+      </div>
+    );
+  }
+  if (event.type === "trying") {
+    return (
+      <div className="text-gray-400">
+        ↳ {event.email}
+      </div>
+    );
+  }
+  if (event.type === "attempt") {
+    const icon = event.status === "verified" ? "✓" : "✗";
+    const cls = event.status === "verified" ? "text-green-600 font-semibold" : "text-red-500";
+    return (
+      <div className={`flex items-center gap-2 ${cls}`}>
+        <span>{icon}</span>
+        <span>{event.email}</span>
+        <span className="text-xs opacity-70">
+          {event.cached ? "cached" : event.code ? `SMTP ${event.code}` : event.status}
+        </span>
+      </div>
+    );
+  }
+  return null;
 }
 
 const inputCls = "w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500 transition-colors";
