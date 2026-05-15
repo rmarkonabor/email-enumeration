@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 
 export default function SettingsPage() {
@@ -119,7 +120,15 @@ export default function SettingsPage() {
 
       {/* API Key */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
-        <h2 className="font-semibold text-sm text-slate-900">Your API Key</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold text-sm text-slate-900">Your API Key</h2>
+          <Link
+            href="/api-docs"
+            className="text-xs px-3 py-1.5 rounded-md bg-blue-50 text-blue-700 border border-blue-100 hover:bg-blue-100 transition-colors font-medium"
+          >
+            View API docs →
+          </Link>
+        </div>
         <div>
           <div className="flex gap-2">
             <input
