@@ -113,6 +113,7 @@ class FindResponse(BaseModel):
     attempts: list[dict] | None = None
     message: str | None = None
     fallback_recommended: bool
+    mail_provider: str | None = None
 
 
 class BatchRequest(BaseModel):
@@ -150,6 +151,7 @@ def _to_response(result, return_attempts: bool) -> FindResponse:
         attempts=result.attempts if return_attempts else None,
         message=message,
         fallback_recommended=fallback,
+        mail_provider=result.mail_provider,
     )
 
 

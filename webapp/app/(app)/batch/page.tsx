@@ -316,6 +316,7 @@ export default function BatchPage() {
                   <th className="text-left pb-2 pr-4">Contact</th>
                   <th className="text-left pb-2 pr-4">Email found</th>
                   <th className="text-left pb-2 pr-4">Status</th>
+                  <th className="text-left pb-2 pr-4">Provider</th>
                   <th className="text-left pb-2">Fallback?</th>
                 </tr>
               </thead>
@@ -338,6 +339,9 @@ export default function BatchPage() {
                     </td>
                     <td className="py-2.5 pr-4">
                       {state === "done" ? <StatusBadge status={r.status} /> : <span className="text-slate-300">—</span>}
+                    </td>
+                    <td className="py-2.5 pr-4 text-slate-500 text-xs">
+                      {state === "done" ? (r.mail_provider ?? "—") : "—"}
                     </td>
                     <td className="py-2.5 text-slate-500">
                       {state === "done" ? (r.fallback_recommended ? "Yes" : "No") : "—"}

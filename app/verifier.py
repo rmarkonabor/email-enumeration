@@ -21,9 +21,10 @@ class FindResult:
     catch_all: bool
     candidates_tried: int
     attempts: list[dict] = field(default_factory=list)
+    mail_provider: str | None = None
 
 
-def _done_event(email, status, catch_all, attempts, fallback) -> dict:
+def _done_event(email, status, catch_all, attempts, fallback, mail_provider=None) -> dict:
     return {
         "type": "done",
         "email": email,
@@ -31,6 +32,7 @@ def _done_event(email, status, catch_all, attempts, fallback) -> dict:
         "catch_all": catch_all,
         "candidates_tried": len(attempts),
         "attempts": attempts,
+        "mail_provider": mail_provider,
         "message": None if status == "verified" else (
             "Domain is catch-all; cannot confirm via SMTP." if status == "catch_all"
             else "No candidate verified. Consider a paid enrichment tool."
@@ -63,12 +65,15 @@ class EmailFinder:
                 first_name, last_name, domain, middle_name, return_attempts, provider, provider_key
             )
 
+        mail_provider = await self.verifier.detect_mail_provider(domain)
+
         catch_all = self.cache.get_catch_all(domain)
         if catch_all is None:
             catch_all = await self.verifier.is_catch_all(domain)
             self.cache.set_catch_all(domain, catch_all)
         if catch_all:
-            return FindResult(email=None, status="catch_all", catch_all=True, candidates_tried=0)
+            return FindResult(email=None, status="catch_all", catch_all=True,
+                              candidates_tried=0, mail_provider=mail_provider)
 
         candidates = generate_permutations(first_name, last_name, domain, middle_name)
         attempts: list[dict] = []
@@ -79,7 +84,8 @@ class EmailFinder:
                 attempts.append({"email": candidate, "status": "verified", "cached": True})
                 return FindResult(email=candidate, status="verified", catch_all=False,
                                   candidates_tried=len(attempts),
-                                  attempts=attempts if return_attempts else [])
+                                  attempts=attempts if return_attempts else [],
+                                  mail_provider=mail_provider)
             if cached == "not_found":
                 attempts.append({"email": candidate, "status": "not_found", "cached": True})
                 continue
@@ -91,13 +97,15 @@ class EmailFinder:
             if result.status == "verified":
                 return FindResult(email=candidate, status="verified", catch_all=False,
                                   candidates_tried=len(attempts),
-                                  attempts=attempts if return_attempts else [])
+                                  attempts=attempts if return_attempts else [],
+                                  mail_provider=mail_provider)
             if self.pacing_seconds > 0:
                 await asyncio.sleep(self.pacing_seconds)
 
         return FindResult(email=None, status="not_found", catch_all=False,
                           candidates_tried=len(attempts),
-                          attempts=attempts if return_attempts else [])
+                          attempts=attempts if return_attempts else [],
+                          mail_provider=mail_provider)
 
     # --------------------------------------------------------- Third-party
     async def _find_third_party(
@@ -110,6 +118,7 @@ class EmailFinder:
         provider: str,
         provider_key: str,
     ) -> FindResult:
+        mail_provider = await self.verifier.detect_mail_provider(domain)
         candidates = generate_permutations(first_name, last_name, domain, middle_name)
         attempts: list[dict] = []
 
@@ -120,15 +129,18 @@ class EmailFinder:
             if status == "verified":
                 return FindResult(email=candidate, status="verified", catch_all=False,
                                   candidates_tried=len(attempts),
-                                  attempts=attempts if return_attempts else [])
+                                  attempts=attempts if return_attempts else [],
+                                  mail_provider=mail_provider)
             if status == "catch_all":
                 return FindResult(email=None, status="catch_all", catch_all=True,
                                   candidates_tried=len(attempts),
-                                  attempts=attempts if return_attempts else [])
+                                  attempts=attempts if return_attempts else [],
+                                  mail_provider=mail_provider)
 
         return FindResult(email=None, status="not_found", catch_all=False,
                           candidates_tried=len(attempts),
-                          attempts=attempts if return_attempts else [])
+                          attempts=attempts if return_attempts else [],
+                          mail_provider=mail_provider)
 
     # --------------------------------------------------------- SMTP stream
     async def find_stream(
@@ -149,6 +161,10 @@ class EmailFinder:
                 yield event
             return
 
+        mail_provider = await self.verifier.detect_mail_provider(domain)
+        if mail_provider:
+            yield {"type": "mail_provider", "mail_provider": mail_provider}
+
         yield {"type": "status", "message": f"Checking catch-all for {domain}…"}
         catch_all = self.cache.get_catch_all(domain)
         cached_ca = catch_all is not None
@@ -158,7 +174,7 @@ class EmailFinder:
         yield {"type": "catch_all", "catch_all": catch_all, "cached": cached_ca}
 
         if catch_all:
-            yield _done_event(None, "catch_all", True, [], True)
+            yield _done_event(None, "catch_all", True, [], True, mail_provider)
             return
 
         candidates = generate_permutations(first_name, last_name, domain, middle_name)
@@ -172,7 +188,7 @@ class EmailFinder:
                 attempt = {"email": candidate, "status": "verified", "cached": True}
                 attempts.append(attempt)
                 yield {"type": "attempt", **attempt}
-                yield _done_event(candidate, "verified", False, attempts, False)
+                yield _done_event(candidate, "verified", False, attempts, False, mail_provider)
                 return
             if cached_status == "not_found":
                 attempt = {"email": candidate, "status": "not_found", "cached": True}
@@ -187,12 +203,12 @@ class EmailFinder:
             yield {"type": "attempt", **attempt}
 
             if result.status == "verified":
-                yield _done_event(candidate, "verified", False, attempts, False)
+                yield _done_event(candidate, "verified", False, attempts, False, mail_provider)
                 return
             if self.pacing_seconds > 0:
                 await asyncio.sleep(self.pacing_seconds)
 
-        yield _done_event(None, "not_found", False, attempts, True)
+        yield _done_event(None, "not_found", False, attempts, True, mail_provider)
 
     # ------------------------------------------------- Third-party stream
     async def _find_stream_third_party(
@@ -204,6 +220,10 @@ class EmailFinder:
         provider: str,
         provider_key: str,
     ) -> AsyncGenerator[dict, None]:
+        mail_provider = await self.verifier.detect_mail_provider(domain)
+        if mail_provider:
+            yield {"type": "mail_provider", "mail_provider": mail_provider}
+
         provider_label = provider.capitalize()
         yield {"type": "status", "message": f"Using {provider_label} to verify…"}
 
@@ -219,13 +239,13 @@ class EmailFinder:
             yield {"type": "attempt", **attempt}
 
             if status == "verified":
-                yield _done_event(candidate, "verified", False, attempts, False)
+                yield _done_event(candidate, "verified", False, attempts, False, mail_provider)
                 return
             if status == "catch_all":
-                yield _done_event(None, "catch_all", True, attempts, True)
+                yield _done_event(None, "catch_all", True, attempts, True, mail_provider)
                 return
 
-        yield _done_event(None, "not_found", False, attempts, True)
+        yield _done_event(None, "not_found", False, attempts, True, mail_provider)
 
 
 __all__ = ["EmailFinder", "FindResult"]

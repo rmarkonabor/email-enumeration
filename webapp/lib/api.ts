@@ -14,6 +14,7 @@ export interface FindResponse {
   attempts?: { email: string; status: string; code?: number; cached?: boolean }[];
   message: string | null;
   fallback_recommended: boolean;
+  mail_provider?: string | null;
 }
 
 export interface BatchResponse {

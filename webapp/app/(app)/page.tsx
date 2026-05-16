@@ -7,6 +7,7 @@ import ProviderPicker from "@/components/ProviderPicker";
 
 type ProgressEvent =
   | { type: "status"; message: string }
+  | { type: "mail_provider"; mail_provider: string }
   | { type: "catch_all"; catch_all: boolean; cached: boolean }
   | { type: "candidates"; count: number }
   | { type: "trying"; email: string }
@@ -191,6 +192,14 @@ function ProgressRow({ event }: { event: ProgressEvent }) {
       <div className="flex items-center gap-2 text-slate-400">
         <span>⟳</span>
         <span>{event.message}</span>
+      </div>
+    );
+  }
+  if (event.type === "mail_provider") {
+    return (
+      <div className="flex items-center gap-2 text-slate-500">
+        <span>◈</span>
+        <span>Mail provider: <span className="text-slate-700 font-medium">{event.mail_provider}</span></span>
       </div>
     );
   }

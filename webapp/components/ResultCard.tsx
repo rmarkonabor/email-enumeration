@@ -17,12 +17,16 @@ export default function ResultCard({ result, request }: { result: FindResponse; 
           <p className="text-slate-700 mt-0.5">{request.first_name} {request.last_name} · {request.domain}</p>
         </div>
         <div>
-          <span className="text-slate-400 text-xs uppercase tracking-wide font-medium">Candidates tried</span>
-          <p className="text-slate-700 mt-0.5">{result.candidates_tried}</p>
+          <span className="text-slate-400 text-xs uppercase tracking-wide font-medium">Mail provider</span>
+          <p className="text-slate-700 mt-0.5">{result.mail_provider ?? "—"}</p>
         </div>
         <div>
           <span className="text-slate-400 text-xs uppercase tracking-wide font-medium">Catch-all domain</span>
           <p className="text-slate-700 mt-0.5">{result.catch_all ? "Yes" : "No"}</p>
+        </div>
+        <div>
+          <span className="text-slate-400 text-xs uppercase tracking-wide font-medium">Candidates tried</span>
+          <p className="text-slate-700 mt-0.5">{result.candidates_tried}</p>
         </div>
         <div>
           <span className="text-slate-400 text-xs uppercase tracking-wide font-medium">Fallback needed</span>

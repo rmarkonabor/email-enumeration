@@ -74,6 +74,37 @@ class SMTPVerifier:
         self._mx_cache[domain] = hosts
         return hosts
 
+    async def detect_mail_provider(self, domain: str) -> str | None:
+        """Return a human-readable mail provider name based on MX records."""
+        mx_hosts = await self.get_mx_records(domain)
+        combined = " ".join(mx_hosts).lower()
+
+        if "google.com" in combined or "googlemail.com" in combined:
+            return "Google Workspace"
+        if "mail.protection.outlook.com" in combined:
+            return "Microsoft 365"
+        if "hotmail.com" in combined or "outlook.com" in combined:
+            return "Outlook.com"
+        if "yahoodns.net" in combined or "yahoo.com" in combined:
+            return "Yahoo"
+        if "zoho.com" in combined:
+            return "Zoho"
+        if "protonmail.ch" in combined or "proton.me" in combined:
+            return "Proton Mail"
+        if "messagingengine.com" in combined:
+            return "Fastmail"
+        if "icloud.com" in combined or "me.com" in combined:
+            return "Apple iCloud"
+        if "mailgun.org" in combined:
+            return "Mailgun"
+        if "sendgrid.net" in combined:
+            return "SendGrid"
+        if "amazonses.com" in combined:
+            return "Amazon SES"
+        if mx_hosts:
+            return None  # Known MX but unrecognised provider
+        return None
+
     async def _smtp_rcpt(
         self, mx_host: str, email: str
     ) -> tuple[int | None, str | None]:
