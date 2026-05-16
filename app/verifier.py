@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 
 from .cache import Cache
+from .metrics import Metrics, Warmup
 from .permutations import generate_permutations
 from .smtp_verifier import SMTPVerifier
 from .third_party_verifier import verify_third_party
@@ -44,10 +46,19 @@ def _done_event(email, status, catch_all, attempts, fallback, mail_provider=None
 
 
 class EmailFinder:
-    def __init__(self, verifier: SMTPVerifier, cache: Cache, pacing_seconds: float = 0.3) -> None:
+    def __init__(
+        self,
+        verifier: SMTPVerifier,
+        cache: Cache,
+        pacing_seconds: float = 0.3,
+        metrics: Metrics | None = None,
+        warmup: Warmup | None = None,
+    ) -> None:
         self.verifier = verifier
         self.cache = cache
         self.pacing_seconds = pacing_seconds
+        self.metrics = metrics
+        self.warmup = warmup
 
     # ------------------------------------------------------------------ SMTP
     async def find(
@@ -94,8 +105,20 @@ class EmailFinder:
                 attempts.append({"email": candidate, "status": "not_found"})
                 continue
 
+            if self.warmup is not None:
+                allowed, reason = self.warmup.can_attempt()
+                if not allowed:
+                    attempts.append({"email": candidate, "status": "throttled", "reason": reason})
+                    break  # No point trying more candidates today
+
+            t0 = time.perf_counter()
             result = await self.verifier.verify_email(candidate)
+            response_ms = int((time.perf_counter() - t0) * 1000)
             self.cache.set_verified(candidate, result.status)
+            if self.warmup is not None:
+                self.warmup.record_attempt(result.response_code)
+            if self.metrics is not None:
+                self.metrics.log_result("smtp", candidate, result.status, result.response_code, response_ms)
             attempts.append({"email": candidate, "status": result.status, "code": result.response_code})
 
             if result.status == "verified":
@@ -128,9 +151,13 @@ class EmailFinder:
         credits_used = 0
 
         for candidate in candidates:
+            t0 = time.perf_counter()
             status, billed = await verify_third_party(candidate, provider, provider_key)
+            response_ms = int((time.perf_counter() - t0) * 1000)
             if billed:
                 credits_used += 1
+            if self.metrics is not None:
+                self.metrics.log_result(provider, candidate, status, None, response_ms)
             attempts.append({"email": candidate, "status": status, "provider": provider})
 
             if status == "verified":
@@ -209,8 +236,22 @@ class EmailFinder:
                 yield {"type": "attempt", **attempt}
                 continue
 
+            if self.warmup is not None:
+                allowed, reason = self.warmup.can_attempt()
+                if not allowed:
+                    attempt = {"email": candidate, "status": "throttled", "reason": reason}
+                    attempts.append(attempt)
+                    yield {"type": "attempt", **attempt}
+                    break
+
+            t0 = time.perf_counter()
             result = await self.verifier.verify_email(candidate)
+            response_ms = int((time.perf_counter() - t0) * 1000)
             self.cache.set_verified(candidate, result.status)
+            if self.warmup is not None:
+                self.warmup.record_attempt(result.response_code)
+            if self.metrics is not None:
+                self.metrics.log_result("smtp", candidate, result.status, result.response_code, response_ms)
             attempt = {"email": candidate, "status": result.status, "code": result.response_code}
             attempts.append(attempt)
             yield {"type": "attempt", **attempt}
@@ -247,9 +288,13 @@ class EmailFinder:
 
         for candidate in candidates:
             yield {"type": "trying", "email": candidate}
+            t0 = time.perf_counter()
             status, billed = await verify_third_party(candidate, provider, provider_key)
+            response_ms = int((time.perf_counter() - t0) * 1000)
             if billed:
                 credits_used += 1
+            if self.metrics is not None:
+                self.metrics.log_result(provider, candidate, status, None, response_ms)
             attempt = {"email": candidate, "status": status, "provider": provider}
             attempts.append(attempt)
             yield {"type": "attempt", **attempt}

@@ -1,0 +1,259 @@
+"""SMTP IP warm-up controller and verification metrics/feedback storage.
+
+Two responsibilities, one SQLite database (shared with the cache):
+
+1. **Warmup**: cap daily SMTP attempts to ramp our outgoing IP reputation
+   gradually. Linear growth from WARMUP_START to WARMUP_MAX over
+   WARMUP_DAYS_TO_MAX days. If the soft-block rate (421/450/451/452) exceeds
+   WARMUP_SOFT_BLOCK_THRESHOLD after a minimum sample size, SMTP is paused
+   for the rest of the UTC day.
+
+2. **Metrics**: log every verification attempt (SMTP or third-party) and
+   accept user feedback ("you said verified but the email bounces") so we
+   can measure real-world accuracy.
+
+Soft-block SMTP codes we count toward throttling:
+   421  Service not available, closing transmission channel
+   450  Mailbox unavailable; try again later
+   451  Local error in processing
+   452  Insufficient system storage
+"""
+from __future__ import annotations
+
+import datetime as dt
+import logging
+import sqlite3
+import time
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+SOFT_BLOCK_CODES = {421, 450, 451, 452}
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS verification_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    method TEXT NOT NULL,
+    email TEXT NOT NULL,
+    status TEXT NOT NULL,
+    smtp_code INTEGER,
+    response_ms INTEGER,
+    soft_block INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_vl_ts ON verification_log (ts);
+CREATE INDEX IF NOT EXISTS idx_vl_email ON verification_log (email);
+
+CREATE TABLE IF NOT EXISTS verification_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts INTEGER NOT NULL,
+    email TEXT NOT NULL,
+    reported_status TEXT,
+    actual_status TEXT NOT NULL,
+    notes TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_vf_email ON verification_feedback (email);
+
+CREATE TABLE IF NOT EXISTS smtp_daily_counters (
+    day TEXT PRIMARY KEY,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    soft_blocks INTEGER NOT NULL DEFAULT 0,
+    paused INTEGER NOT NULL DEFAULT 0
+);
+"""
+
+
+def _today() -> str:
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+
+
+class Metrics:
+    """Logs verification results and feedback for accuracy tracking."""
+
+    def __init__(self, db_path: str | Path) -> None:
+        self.db_path = str(db_path)
+        self._init_db()
+
+    def _conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        return conn
+
+    def _init_db(self) -> None:
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        with self._conn() as conn:
+            conn.executescript(SCHEMA)
+
+    # --- writes ---
+    def log_result(
+        self,
+        method: str,
+        email: str,
+        status: str,
+        smtp_code: int | None = None,
+        response_ms: int | None = None,
+    ) -> None:
+        soft = 1 if (smtp_code in SOFT_BLOCK_CODES) else 0
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO verification_log (ts, method, email, status, smtp_code, response_ms, soft_block) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (int(time.time()), method, email, status, smtp_code, response_ms, soft),
+            )
+            conn.commit()
+
+    def log_feedback(
+        self,
+        email: str,
+        actual_status: str,
+        reported_status: str | None = None,
+        notes: str | None = None,
+    ) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO verification_feedback (ts, email, reported_status, actual_status, notes) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (int(time.time()), email, reported_status, actual_status, notes),
+            )
+            conn.commit()
+
+    # --- reads ---
+    def today_volume(self) -> dict:
+        cutoff = int(time.time()) - 86400
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT "
+                "  SUM(CASE WHEN method='smtp' THEN 1 ELSE 0 END) AS smtp, "
+                "  SUM(CASE WHEN method='zerobounce' THEN 1 ELSE 0 END) AS zerobounce, "
+                "  SUM(CASE WHEN method='reoon' THEN 1 ELSE 0 END) AS reoon, "
+                "  COUNT(*) AS total "
+                "FROM verification_log WHERE ts > ?",
+                (cutoff,),
+            ).fetchone()
+        return {"smtp": row[0] or 0, "zerobounce": row[1] or 0, "reoon": row[2] or 0, "total": row[3] or 0}
+
+    def accuracy(self, days: int = 30) -> dict:
+        cutoff = int(time.time()) - days * 86400
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT "
+                "  COUNT(*) AS total, "
+                "  SUM(CASE WHEN reported_status = actual_status THEN 1 ELSE 0 END) AS correct "
+                "FROM verification_feedback WHERE ts > ?",
+                (cutoff,),
+            ).fetchone()
+        total = row[0] or 0
+        correct = row[1] or 0
+        return {
+            "feedback_count": total,
+            "correct": correct,
+            "accuracy_pct": round(100.0 * correct / total, 1) if total else None,
+            "window_days": days,
+        }
+
+
+class Warmup:
+    """SMTP IP warm-up: daily cap + soft-block circuit breaker."""
+
+    def __init__(
+        self,
+        db_path: str | Path,
+        start: int = 100,
+        max_cap: int = 5000,
+        days_to_max: int = 30,
+        soft_block_threshold: float = 0.15,
+        min_sample_before_breaker: int = 50,
+    ) -> None:
+        self.db_path = str(db_path)
+        self.start = start
+        self.max_cap = max_cap
+        self.days_to_max = max(1, days_to_max)
+        self.soft_block_threshold = soft_block_threshold
+        self.min_sample = min_sample_before_breaker
+        self.started_at = int(time.time())
+
+    def _conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        return conn
+
+    def _days_elapsed(self) -> int:
+        return max(0, int((time.time() - self.started_at) // 86400))
+
+    def current_cap(self) -> int:
+        d = self._days_elapsed()
+        if d >= self.days_to_max:
+            return self.max_cap
+        return self.start + int((self.max_cap - self.start) * d / self.days_to_max)
+
+    def _ensure_today(self, conn: sqlite3.Connection) -> tuple[int, int, int]:
+        day = _today()
+        row = conn.execute(
+            "SELECT attempts, soft_blocks, paused FROM smtp_daily_counters WHERE day = ?",
+            (day,),
+        ).fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT INTO smtp_daily_counters (day, attempts, soft_blocks, paused) "
+                "VALUES (?, 0, 0, 0)",
+                (day,),
+            )
+            conn.commit()
+            return (0, 0, 0)
+        return row
+
+    def can_attempt(self) -> tuple[bool, str | None]:
+        """Returns (allowed, reason_if_blocked)."""
+        with self._conn() as conn:
+            attempts, soft_blocks, paused = self._ensure_today(conn)
+        if paused:
+            return False, "smtp_soft_block_circuit_open"
+        if attempts >= self.current_cap():
+            return False, "smtp_daily_cap_reached"
+        return True, None
+
+    def record_attempt(self, smtp_code: int | None) -> None:
+        is_soft = 1 if (smtp_code in SOFT_BLOCK_CODES) else 0
+        with self._conn() as conn:
+            self._ensure_today(conn)
+            conn.execute(
+                "UPDATE smtp_daily_counters "
+                "SET attempts = attempts + 1, soft_blocks = soft_blocks + ? "
+                "WHERE day = ?",
+                (is_soft, _today()),
+            )
+            row = conn.execute(
+                "SELECT attempts, soft_blocks FROM smtp_daily_counters WHERE day = ?",
+                (_today(),),
+            ).fetchone()
+            attempts, soft_blocks = row
+            if attempts >= self.min_sample and (soft_blocks / attempts) > self.soft_block_threshold:
+                conn.execute(
+                    "UPDATE smtp_daily_counters SET paused = 1 WHERE day = ?",
+                    (_today(),),
+                )
+                logger.warning(
+                    "SMTP circuit breaker open: %d/%d soft blocks today (%.1f%% > %.1f%% threshold). Pausing SMTP for the rest of the UTC day.",
+                    soft_blocks, attempts, 100 * soft_blocks / attempts, 100 * self.soft_block_threshold,
+                )
+            conn.commit()
+
+    def today_stats(self) -> dict:
+        with self._conn() as conn:
+            attempts, soft_blocks, paused = self._ensure_today(conn)
+        cap = self.current_cap()
+        return {
+            "day": _today(),
+            "attempts": attempts,
+            "soft_blocks": soft_blocks,
+            "soft_block_pct": round(100.0 * soft_blocks / attempts, 1) if attempts else 0.0,
+            "cap": cap,
+            "remaining": max(0, cap - attempts),
+            "paused": bool(paused),
+            "day_in_warmup": min(self._days_elapsed(), self.days_to_max),
+            "days_to_max": self.days_to_max,
+        }
+
+
+__all__ = ["Metrics", "Warmup", "SOFT_BLOCK_CODES"]

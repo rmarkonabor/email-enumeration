@@ -26,6 +26,7 @@ from slowapi.errors import RateLimitExceeded
 
 from .auth import is_valid_key
 from .cache import Cache
+from .metrics import Metrics, Warmup
 from .smtp_verifier import SMTPVerifier
 from .verifier import EmailFinder
 
@@ -47,6 +48,12 @@ PACING_SECONDS = float(os.getenv("PACING_SECONDS", "0.3"))
 
 MAX_BATCH_SIZE = 50
 RATE_LIMIT = os.getenv("RATE_LIMIT", "500/minute")
+
+# ----- SMTP warm-up (env-configurable) -----
+WARMUP_START = int(os.getenv("WARMUP_START_VOLUME", "100"))
+WARMUP_MAX = int(os.getenv("WARMUP_MAX_VOLUME", "5000"))
+WARMUP_DAYS_TO_MAX = int(os.getenv("WARMUP_DAYS_TO_MAX", "30"))
+WARMUP_SOFT_BLOCK_THRESHOLD = float(os.getenv("WARMUP_SOFT_BLOCK_THRESHOLD", "0.15"))
 
 
 def _rate_key(request: Request) -> str:
@@ -84,8 +91,19 @@ async def lifespan(app: FastAPI):
         catch_all_ttl=CATCH_ALL_TTL,
         verified_ttl=VERIFIED_TTL,
     )
+    metrics = Metrics(DB_PATH)
+    warmup = Warmup(
+        DB_PATH,
+        start=WARMUP_START,
+        max_cap=WARMUP_MAX,
+        days_to_max=WARMUP_DAYS_TO_MAX,
+        soft_block_threshold=WARMUP_SOFT_BLOCK_THRESHOLD,
+    )
+    app.state.metrics = metrics
+    app.state.warmup = warmup
     app.state.finder = EmailFinder(
-        verifier=verifier, cache=cache, pacing_seconds=PACING_SECONDS
+        verifier=verifier, cache=cache, pacing_seconds=PACING_SECONDS,
+        metrics=metrics, warmup=warmup,
     )
 
     # Run once on startup so a restart actually clears anything overdue,
@@ -168,6 +186,13 @@ class FindResponse(BaseModel):
     credits_used: int = 0
 
 
+class FeedbackRequest(BaseModel):
+    email: str = Field(..., min_length=3, description="The email address you are reporting on")
+    actual_status: str = Field(..., description="What the email really is: verified | not_found | catch_all")
+    reported_status: str | None = Field(default=None, description="What we previously said about it")
+    notes: str | None = Field(default=None, max_length=500)
+
+
 class BatchRequest(BaseModel):
     contacts: list[FindRequest] = Field(..., max_length=MAX_BATCH_SIZE)
     verify_provider: str = Field(default="smtp")
@@ -183,6 +208,40 @@ class BatchResponse(BaseModel):
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get(
+    "/stats",
+    dependencies=[Depends(require_api_key)],
+    summary="SMTP warm-up status, today's volume, and feedback-based accuracy",
+)
+async def stats() -> dict:
+    metrics: Metrics = app.state.metrics
+    warmup: Warmup = app.state.warmup
+    return {
+        "warmup": warmup.today_stats(),
+        "volume_24h": metrics.today_volume(),
+        "accuracy_30d": metrics.accuracy(days=30),
+        "accuracy_7d": metrics.accuracy(days=7),
+    }
+
+
+@app.post(
+    "/verify/feedback",
+    dependencies=[Depends(require_api_key)],
+    summary="Report an incorrect verification result",
+)
+async def submit_feedback(req: FeedbackRequest) -> dict:
+    if req.actual_status not in {"verified", "not_found", "catch_all"}:
+        raise HTTPException(status_code=400, detail="actual_status must be one of: verified, not_found, catch_all")
+    metrics: Metrics = app.state.metrics
+    metrics.log_feedback(
+        email=req.email,
+        actual_status=req.actual_status,
+        reported_status=req.reported_status,
+        notes=req.notes,
+    )
+    return {"recorded": True}
 
 
 def _to_response(result, return_attempts: bool) -> FindResponse:
