@@ -62,21 +62,32 @@ def _parse_source_ips(raw: str) -> tuple[list[str], dict[str, str]]:
 
     Accepts comma-separated entries, each either a plain IP or an ip:helo pair:
       5.78.84.39:verify1.mailcheckhq.com,5.78.29.123:verify2.mailcheckhq.com
-    IPv6 is not supported (the colon split assumes IPv4).
+
+    IPv6 is rejected (the colon split assumes IPv4 dotted-quad). Duplicate IPs
+    are collapsed to keep warmup capacity reporting honest.
     """
     ips: list[str] = []
     helo_map: dict[str, str] = {}
+    seen: set[str] = set()
     for entry in raw.split(","):
         entry = entry.strip()
         if not entry:
             continue
+        if entry.startswith("[") or entry.count(":") > 1:
+            logger.warning("SMTP_SOURCE_IPS: skipping unsupported entry %r (IPv6 not supported)", entry)
+            continue
         if ":" in entry:
             ip, helo = entry.split(":", 1)
             ip, helo = ip.strip(), helo.strip()
-            ips.append(ip)
-            helo_map[ip] = helo
         else:
-            ips.append(entry)
+            ip, helo = entry, ""
+        if ip in seen:
+            logger.warning("SMTP_SOURCE_IPS: skipping duplicate IP %s", ip)
+            continue
+        seen.add(ip)
+        ips.append(ip)
+        if helo:
+            helo_map[ip] = helo
     return ips, helo_map
 
 

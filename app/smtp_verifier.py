@@ -170,7 +170,15 @@ class SMTPVerifier:
             except (asyncio.TimeoutError, socket.gaierror, aiosmtplib.SMTPException,
                     OSError, ConnectionError) as e:
                 last_error = f"{type(e).__name__}: {e}"
-                logger.debug("SMTP attempt to %s for %s failed: %s", host, email, e)
+                # OSError on bind = source IP not configured on this host
+                if isinstance(e, OSError) and source_ip and "assign" in str(e).lower():
+                    logger.warning(
+                        "SMTP source_address bind failed for IP %s (not configured on host?): %s",
+                        source_ip, e,
+                    )
+                else:
+                    logger.debug("SMTP attempt to %s from %s for %s failed: %s",
+                                 host, source_ip or "default", email, e)
                 continue
 
             if code is None:

@@ -110,7 +110,12 @@ class EmailFinder:
 
         catch_all = self.cache.get_catch_all(domain)
         if catch_all is None:
-            ca_ip, _ = self._pick_source_ip(domain)
+            ca_ip, block_reason = self._pick_source_ip(domain)
+            if block_reason is not None:
+                return FindResult(email=None, status="not_found", catch_all=False,
+                                  candidates_tried=0,
+                                  attempts=[{"status": "throttled", "reason": block_reason}] if return_attempts else [],
+                                  mail_provider=mail_provider)
             catch_all = await self.verifier.is_catch_all(domain, source_ip=ca_ip)
             if self.warmup is not None:
                 self.warmup.record_attempt(None, domain, source_ip=ca_ip or "")
@@ -237,7 +242,11 @@ class EmailFinder:
         catch_all = self.cache.get_catch_all(domain)
         cached_ca = catch_all is not None
         if catch_all is None:
-            ca_ip, _ = self._pick_source_ip(domain)
+            ca_ip, block_reason = self._pick_source_ip(domain)
+            if block_reason is not None:
+                yield {"type": "attempt", "status": "throttled", "reason": block_reason}
+                yield _done_event(None, "not_found", False, [], True, mail_provider)
+                return
             catch_all = await self.verifier.is_catch_all(domain, source_ip=ca_ip)
             if self.warmup is not None:
                 self.warmup.record_attempt(None, domain, source_ip=ca_ip or "")
