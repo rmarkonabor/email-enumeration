@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 import time
 
 import httpx
@@ -20,7 +21,7 @@ _CACHE_TTL = 300
 async def is_valid_key(key: str) -> bool:
     if not key:
         return False
-    if ADMIN_API_KEY and key == ADMIN_API_KEY:
+    if ADMIN_API_KEY and secrets.compare_digest(key, ADMIN_API_KEY):
         return True
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return False

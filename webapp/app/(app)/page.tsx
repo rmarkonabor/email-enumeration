@@ -50,58 +50,83 @@ export default function SinglePage() {
     setEvents([]);
 
     const { baseUrl, apiKey, verifyProvider, zerobounceKey, reoonKey } = getConfig();
-    const params = new URLSearchParams({
-      first_name: form.first_name.trim(),
-      last_name: form.last_name.trim(),
-      domain: form.domain.trim(),
-      api_key: apiKey,
-      verify_provider: verifyProvider,
-      zerobounce_api_key: zerobounceKey,
-      reoon_api_key: reoonKey,
-    });
-    if (form.middle_name?.trim()) params.set("middle_name", form.middle_name.trim());
+    const abortController = new AbortController();
+    esRef.current = { close: () => abortController.abort() } as unknown as EventSource;
 
-    const es = new EventSource(`${baseUrl}/find/stream?${params}`);
-    esRef.current = es;
-
-    es.onmessage = (e) => {
-      const event: ProgressEvent = JSON.parse(e.data);
-      setEvents(prev => [...prev, event]);
-      if (event.type === "done") {
-        const res: FindResponse = {
-          email: event.email,
-          status: event.status,
-          catch_all: event.catch_all,
-          candidates_tried: event.candidates_tried,
-          attempts: event.attempts,
-          message: event.message,
-          fallback_recommended: event.fallback_recommended,
-          mail_provider: event.mail_provider ?? null,
-          credits_used: event.credits_used ?? 0,
-        };
-        setResult(res);
-        const req: FindRequest = {
+    (async () => {
+      try {
+        const body: Record<string, string> = {
           first_name: form.first_name.trim(),
           last_name: form.last_name.trim(),
           domain: form.domain.trim(),
-          return_attempts: true,
+          verify_provider: verifyProvider,
+          zerobounce_api_key: zerobounceKey,
+          reoon_api_key: reoonKey,
         };
-        if (form.middle_name?.trim()) req.middle_name = form.middle_name.trim();
-        addHistory(req, res, generateRunId(), "single", verifyProvider);
-        es.close();
-        setLoading(false);
-      } else if (event.type === "error") {
-        setError(event.message);
-        es.close();
+        if (form.middle_name?.trim()) body.middle_name = form.middle_name.trim();
+
+        const res = await fetch(`${baseUrl}/find/stream`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+          body: JSON.stringify(body),
+          signal: abortController.signal,
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.detail || `HTTP ${res.status}`);
+        }
+
+        const reader = res.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const event: ProgressEvent = JSON.parse(line.slice(6));
+            setEvents(prev => [...prev, event]);
+
+            if (event.type === "done") {
+              const resp: FindResponse = {
+                email: event.email,
+                status: event.status,
+                catch_all: event.catch_all,
+                candidates_tried: event.candidates_tried,
+                attempts: event.attempts,
+                message: event.message,
+                fallback_recommended: event.fallback_recommended,
+                mail_provider: event.mail_provider ?? null,
+                credits_used: event.credits_used ?? 0,
+              };
+              setResult(resp);
+              const req: FindRequest = {
+                first_name: form.first_name.trim(),
+                last_name: form.last_name.trim(),
+                domain: form.domain.trim(),
+                return_attempts: true,
+              };
+              if (form.middle_name?.trim()) req.middle_name = form.middle_name.trim();
+              addHistory(req, resp, generateRunId(), "single", verifyProvider);
+              setLoading(false);
+            } else if (event.type === "error") {
+              setError(event.message);
+              setLoading(false);
+            }
+          }
+        }
+      } catch (e: unknown) {
+        if ((e as Error).name === "AbortError") return;
+        setError("Connection failed. Check your API Base URL and API Key in Settings.");
         setLoading(false);
       }
-    };
-
-    es.onerror = () => {
-      setError("Connection failed. Check your API Base URL and API Key in Settings.");
-      es.close();
-      setLoading(false);
-    };
+    })();
   }
 
   return (

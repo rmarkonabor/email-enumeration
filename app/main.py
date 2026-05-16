@@ -17,7 +17,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
+from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -181,35 +181,35 @@ async def find(req: FindRequest) -> FindResponse:
     return _to_response(result, req.return_attempts)
 
 
-@app.get(
+class StreamRequest(BaseModel):
+    first_name: str = Field(..., min_length=1)
+    last_name: str = Field(..., min_length=1)
+    domain: str = Field(..., min_length=3)
+    middle_name: str | None = Field(default=None)
+    verify_provider: str = Field(default="smtp")
+    zerobounce_api_key: str = Field(default="")
+    reoon_api_key: str = Field(default="")
+
+
+@app.post(
     "/find/stream",
+    dependencies=[Depends(require_api_key)],
     summary="Stream live progress for a single email lookup (SSE)",
 )
-async def find_stream(
-    first_name: str = Query(...),
-    last_name: str = Query(...),
-    domain: str = Query(...),
-    middle_name: str | None = Query(default=None),
-    api_key: str = Query(default=""),
-    verify_provider: str = Query(default="smtp"),
-    zerobounce_api_key: str = Query(default=""),
-    reoon_api_key: str = Query(default=""),
-) -> StreamingResponse:
-    if not await is_valid_key(api_key):
-        raise HTTPException(status_code=401, detail="Invalid or missing api_key")
-
-    provider_key = zerobounce_api_key if verify_provider == "zerobounce" else (reoon_api_key if verify_provider == "reoon" else "")
+async def find_stream(req: StreamRequest) -> StreamingResponse:
+    provider_key = req.zerobounce_api_key if req.verify_provider == "zerobounce" else (req.reoon_api_key if req.verify_provider == "reoon" else "")
     finder: EmailFinder = app.state.finder
 
     async def event_gen():
         try:
             async for event in finder.find_stream(
-                first_name, last_name, domain, middle_name,
-                provider=verify_provider, provider_key=provider_key,
+                req.first_name, req.last_name, req.domain, req.middle_name,
+                provider=req.verify_provider, provider_key=provider_key,
             ):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            logger.error("find_stream error: %s", e, exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Verification failed. Please try again.'})}\n\n"
 
     return StreamingResponse(event_gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -241,7 +241,8 @@ async def find_batch_stream(req: BatchRequest) -> StreamingResponse:
                 resp = _to_response(result, False)
                 yield f"data: {json.dumps({'type': 'contact_done', 'index': i, **resp.model_dump()})}\n\n"
             except Exception as e:
-                yield f"data: {json.dumps({'type': 'contact_done', 'index': i, 'email': None, 'status': 'error', 'catch_all': False, 'candidates_tried': 0, 'message': str(e), 'fallback_recommended': False})}\n\n"
+                logger.error("batch_stream contact %d error: %s", i, e, exc_info=True)
+                yield f"data: {json.dumps({'type': 'contact_done', 'index': i, 'email': None, 'status': 'error', 'catch_all': False, 'candidates_tried': 0, 'message': 'Verification failed. Please try again.', 'fallback_recommended': False})}\n\n"
         yield f"data: {json.dumps({'type': 'done', 'total': total})}\n\n"
 
     return StreamingResponse(event_gen(), media_type="text/event-stream",

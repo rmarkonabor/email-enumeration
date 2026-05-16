@@ -51,7 +51,7 @@ async def verify_reoon(email: str, api_key: str) -> tuple[str, bool]:
             r.raise_for_status()
             data = r.json()
         status = (data.get("status") or "").lower()
-        logger.info("Reoon %s -> %s", email, status or data)
+        logger.info("Reoon %s -> status=%s is_catch_all=%s", email, status, data.get("is_catch_all") or data.get("is_catchall"))
         if status == "safe":
             return "verified", True
         if status in ("invalid", "disposable", "spamtrap", "disabled"):
