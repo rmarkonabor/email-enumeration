@@ -49,11 +49,12 @@ PACING_SECONDS = float(os.getenv("PACING_SECONDS", "0.3"))
 MAX_BATCH_SIZE = 50
 RATE_LIMIT = os.getenv("RATE_LIMIT", "500/minute")
 
-# ----- SMTP warm-up (env-configurable) -----
-WARMUP_START = int(os.getenv("WARMUP_START_VOLUME", "100"))
-WARMUP_MAX = int(os.getenv("WARMUP_MAX_VOLUME", "5000"))
-WARMUP_DAYS_TO_MAX = int(os.getenv("WARMUP_DAYS_TO_MAX", "30"))
-WARMUP_SOFT_BLOCK_THRESHOLD = float(os.getenv("WARMUP_SOFT_BLOCK_THRESHOLD", "0.15"))
+# ----- SMTP warm-up (env-configurable, conservative defaults) -----
+WARMUP_START = int(os.getenv("WARMUP_START_VOLUME", "25"))
+WARMUP_MAX = int(os.getenv("WARMUP_MAX_VOLUME", "1500"))
+WARMUP_DAYS_TO_MAX = int(os.getenv("WARMUP_DAYS_TO_MAX", "60"))
+WARMUP_SOFT_BLOCK_THRESHOLD = float(os.getenv("WARMUP_SOFT_BLOCK_THRESHOLD", "0.05"))
+WARMUP_PER_DOMAIN_CAP = int(os.getenv("WARMUP_PER_DOMAIN_CAP", "40"))
 
 
 def _rate_key(request: Request) -> str:
@@ -98,6 +99,7 @@ async def lifespan(app: FastAPI):
         max_cap=WARMUP_MAX,
         days_to_max=WARMUP_DAYS_TO_MAX,
         soft_block_threshold=WARMUP_SOFT_BLOCK_THRESHOLD,
+        per_domain_cap=WARMUP_PER_DOMAIN_CAP,
     )
     app.state.metrics = metrics
     app.state.warmup = warmup

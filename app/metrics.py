@@ -60,6 +60,14 @@ CREATE TABLE IF NOT EXISTS smtp_daily_counters (
     soft_blocks INTEGER NOT NULL DEFAULT 0,
     paused INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS smtp_domain_daily (
+    day TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    soft_blocks INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, domain)
+);
 """
 
 
@@ -159,11 +167,12 @@ class Warmup:
     def __init__(
         self,
         db_path: str | Path,
-        start: int = 100,
-        max_cap: int = 5000,
-        days_to_max: int = 30,
-        soft_block_threshold: float = 0.15,
+        start: int = 25,
+        max_cap: int = 1500,
+        days_to_max: int = 60,
+        soft_block_threshold: float = 0.05,
         min_sample_before_breaker: int = 50,
+        per_domain_cap: int = 40,
     ) -> None:
         self.db_path = str(db_path)
         self.start = start
@@ -171,7 +180,11 @@ class Warmup:
         self.days_to_max = max(1, days_to_max)
         self.soft_block_threshold = soft_block_threshold
         self.min_sample = min_sample_before_breaker
+        self.per_domain_cap = per_domain_cap
         self.started_at = int(time.time())
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        with self._conn() as conn:
+            conn.executescript(SCHEMA)
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -203,35 +216,61 @@ class Warmup:
             return (0, 0, 0)
         return row
 
-    def can_attempt(self) -> tuple[bool, str | None]:
+    def _domain_today(self, conn: sqlite3.Connection, domain: str) -> tuple[int, int]:
+        row = conn.execute(
+            "SELECT attempts, soft_blocks FROM smtp_domain_daily WHERE day = ? AND domain = ?",
+            (_today(), domain),
+        ).fetchone()
+        return row if row else (0, 0)
+
+    def can_attempt(self, target_domain: str | None = None) -> tuple[bool, str | None]:
         """Returns (allowed, reason_if_blocked)."""
         with self._conn() as conn:
-            attempts, soft_blocks, paused = self._ensure_today(conn)
+            attempts, _soft, paused = self._ensure_today(conn)
+            domain_attempts = 0
+            domain_soft = 0
+            if target_domain:
+                domain_attempts, domain_soft = self._domain_today(conn, target_domain)
         if paused:
             return False, "smtp_soft_block_circuit_open"
         if attempts >= self.current_cap():
             return False, "smtp_daily_cap_reached"
+        if target_domain and domain_attempts >= self.per_domain_cap:
+            return False, f"smtp_per_domain_cap_reached:{target_domain}"
+        if target_domain and domain_attempts >= 10 and domain_soft >= 3:
+            # Per-domain mini circuit breaker: 3+ soft blocks against a single
+            # recipient domain means that MX is throttling us; back off.
+            return False, f"smtp_per_domain_soft_block:{target_domain}"
         return True, None
 
-    def record_attempt(self, smtp_code: int | None) -> None:
+    def record_attempt(self, smtp_code: int | None, target_domain: str | None = None) -> None:
         is_soft = 1 if (smtp_code in SOFT_BLOCK_CODES) else 0
+        day = _today()
         with self._conn() as conn:
             self._ensure_today(conn)
             conn.execute(
                 "UPDATE smtp_daily_counters "
                 "SET attempts = attempts + 1, soft_blocks = soft_blocks + ? "
                 "WHERE day = ?",
-                (is_soft, _today()),
+                (is_soft, day),
             )
+            if target_domain:
+                conn.execute(
+                    "INSERT INTO smtp_domain_daily (day, domain, attempts, soft_blocks) "
+                    "VALUES (?, ?, 1, ?) "
+                    "ON CONFLICT(day, domain) DO UPDATE SET "
+                    "  attempts = attempts + 1, soft_blocks = soft_blocks + ?",
+                    (day, target_domain, is_soft, is_soft),
+                )
             row = conn.execute(
                 "SELECT attempts, soft_blocks FROM smtp_daily_counters WHERE day = ?",
-                (_today(),),
+                (day,),
             ).fetchone()
             attempts, soft_blocks = row
             if attempts >= self.min_sample and (soft_blocks / attempts) > self.soft_block_threshold:
                 conn.execute(
                     "UPDATE smtp_daily_counters SET paused = 1 WHERE day = ?",
-                    (_today(),),
+                    (day,),
                 )
                 logger.warning(
                     "SMTP circuit breaker open: %d/%d soft blocks today (%.1f%% > %.1f%% threshold). Pausing SMTP for the rest of the UTC day.",
@@ -242,6 +281,11 @@ class Warmup:
     def today_stats(self) -> dict:
         with self._conn() as conn:
             attempts, soft_blocks, paused = self._ensure_today(conn)
+            top_domains = conn.execute(
+                "SELECT domain, attempts, soft_blocks FROM smtp_domain_daily "
+                "WHERE day = ? ORDER BY attempts DESC LIMIT 10",
+                (_today(),),
+            ).fetchall()
         cap = self.current_cap()
         return {
             "day": _today(),
@@ -251,8 +295,12 @@ class Warmup:
             "cap": cap,
             "remaining": max(0, cap - attempts),
             "paused": bool(paused),
+            "per_domain_cap": self.per_domain_cap,
             "day_in_warmup": min(self._days_elapsed(), self.days_to_max),
             "days_to_max": self.days_to_max,
+            "top_domains_today": [
+                {"domain": d, "attempts": a, "soft_blocks": s} for d, a, s in top_domains
+            ],
         }
 
 

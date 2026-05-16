@@ -106,7 +106,7 @@ class EmailFinder:
                 continue
 
             if self.warmup is not None:
-                allowed, reason = self.warmup.can_attempt()
+                allowed, reason = self.warmup.can_attempt(domain)
                 if not allowed:
                     attempts.append({"email": candidate, "status": "throttled", "reason": reason})
                     break  # No point trying more candidates today
@@ -116,7 +116,7 @@ class EmailFinder:
             response_ms = int((time.perf_counter() - t0) * 1000)
             self.cache.set_verified(candidate, result.status)
             if self.warmup is not None:
-                self.warmup.record_attempt(result.response_code)
+                self.warmup.record_attempt(result.response_code, domain)
             if self.metrics is not None:
                 self.metrics.log_result("smtp", candidate, result.status, result.response_code, response_ms)
             attempts.append({"email": candidate, "status": result.status, "code": result.response_code})
@@ -237,7 +237,7 @@ class EmailFinder:
                 continue
 
             if self.warmup is not None:
-                allowed, reason = self.warmup.can_attempt()
+                allowed, reason = self.warmup.can_attempt(domain)
                 if not allowed:
                     attempt = {"email": candidate, "status": "throttled", "reason": reason}
                     attempts.append(attempt)
@@ -249,7 +249,7 @@ class EmailFinder:
             response_ms = int((time.perf_counter() - t0) * 1000)
             self.cache.set_verified(candidate, result.status)
             if self.warmup is not None:
-                self.warmup.record_attempt(result.response_code)
+                self.warmup.record_attempt(result.response_code, domain)
             if self.metrics is not None:
                 self.metrics.log_result("smtp", candidate, result.status, result.response_code, response_ms)
             attempt = {"email": candidate, "status": result.status, "code": result.response_code}
