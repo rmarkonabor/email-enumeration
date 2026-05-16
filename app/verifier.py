@@ -110,8 +110,10 @@ class EmailFinder:
 
         catch_all = self.cache.get_catch_all(domain)
         if catch_all is None:
-            ca_ip = self.source_ips[0] if self.source_ips else None
+            ca_ip, _ = self._pick_source_ip(domain)
             catch_all = await self.verifier.is_catch_all(domain, source_ip=ca_ip)
+            if self.warmup is not None:
+                self.warmup.record_attempt(None, domain, source_ip=ca_ip or "")
             self.cache.set_catch_all(domain, catch_all)
         if catch_all:
             best_guess = generate_permutations(first_name, last_name, domain, middle_name)
@@ -235,8 +237,10 @@ class EmailFinder:
         catch_all = self.cache.get_catch_all(domain)
         cached_ca = catch_all is not None
         if catch_all is None:
-            ca_ip = self.source_ips[0] if self.source_ips else None
+            ca_ip, _ = self._pick_source_ip(domain)
             catch_all = await self.verifier.is_catch_all(domain, source_ip=ca_ip)
+            if self.warmup is not None:
+                self.warmup.record_attempt(None, domain, source_ip=ca_ip or "")
             self.cache.set_catch_all(domain, catch_all)
         yield {"type": "catch_all", "catch_all": catch_all, "cached": cached_ca}
 

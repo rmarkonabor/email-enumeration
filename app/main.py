@@ -55,12 +55,14 @@ WARMUP_MAX = int(os.getenv("WARMUP_MAX_VOLUME", "1500"))
 WARMUP_DAYS_TO_MAX = int(os.getenv("WARMUP_DAYS_TO_MAX", "60"))
 WARMUP_SOFT_BLOCK_THRESHOLD = float(os.getenv("WARMUP_SOFT_BLOCK_THRESHOLD", "0.05"))
 WARMUP_PER_DOMAIN_CAP = int(os.getenv("WARMUP_PER_DOMAIN_CAP", "40"))
-def _parse_source_ips(raw: str) -> tuple[list[str], dict[str, str]]:
-    """Parse SMTP_SOURCE_IPS env var.
 
-    Accepts comma-separated entries of either plain IPs or ip:helo pairs:
+
+def _parse_source_ips(raw: str) -> tuple[list[str], dict[str, str]]:
+    """Parse SMTP_SOURCE_IPS env var into (ips, ip->helo map).
+
+    Accepts comma-separated entries, each either a plain IP or an ip:helo pair:
       5.78.84.39:verify1.mailcheckhq.com,5.78.29.123:verify2.mailcheckhq.com
-    Returns (list_of_ips, ip_to_helo_map).
+    IPv6 is not supported (the colon split assumes IPv4).
     """
     ips: list[str] = []
     helo_map: dict[str, str] = {}
@@ -76,6 +78,7 @@ def _parse_source_ips(raw: str) -> tuple[list[str], dict[str, str]]:
         else:
             ips.append(entry)
     return ips, helo_map
+
 
 SMTP_SOURCE_IPS, SMTP_IP_HELO_MAP = _parse_source_ips(os.getenv("SMTP_SOURCE_IPS", ""))
 
