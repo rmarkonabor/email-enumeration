@@ -8,6 +8,7 @@ import { createClient } from "@/lib/supabase/client";
 
 export default function NavBar() {
   const [email, setEmail] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
   const supabase = createClient();
@@ -20,7 +21,7 @@ export default function NavBar() {
 
       const { data: profile } = await supabase
         .from("profiles")
-        .select("api_key, verify_provider, zerobounce_api_key, reoon_api_key")
+        .select("api_key, verify_provider, zerobounce_api_key, reoon_api_key, is_admin")
         .eq("id", user.id)
         .single();
 
@@ -28,6 +29,7 @@ export default function NavBar() {
       if (profile?.verify_provider) localStorage.setItem("ef_verify_provider", profile.verify_provider);
       if (profile?.zerobounce_api_key !== undefined) localStorage.setItem("ef_zerobounce_key", profile.zerobounce_api_key ?? "");
       if (profile?.reoon_api_key !== undefined) localStorage.setItem("ef_reoon_key", profile.reoon_api_key ?? "");
+      setIsAdmin(!!profile?.is_admin);
     }
     loadUser();
   }, []);
@@ -44,6 +46,7 @@ export default function NavBar() {
     { href: "/batch", label: "Batch" },
     { href: "/history", label: "History" },
     { href: "/settings", label: "Settings" },
+    ...(isAdmin ? [{ href: "/admin", label: "Admin" }] : []),
   ];
 
   return (

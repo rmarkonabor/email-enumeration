@@ -47,11 +47,20 @@ class SMTPVerifier:
         sender_email: str = "verify@example.com",
         helo_hostname: str = "verifier.example.com",
         smtp_timeout: float = 10.0,
+        ip_helo_map: dict[str, str] | None = None,
     ) -> None:
         self.sender_email = sender_email
         self.helo_hostname = helo_hostname
         self.smtp_timeout = smtp_timeout
+        # Maps source_ip -> helo_hostname for per-IP HELO alignment
+        self.ip_helo_map: dict[str, str] = ip_helo_map or {}
         self._mx_cache: dict[str, list[str]] = {}
+
+    def _helo_for(self, source_ip: str | None) -> str:
+        """Return the HELO hostname for the given source IP."""
+        if source_ip and source_ip in self.ip_helo_map:
+            return self.ip_helo_map[source_ip]
+        return self.helo_hostname
 
     async def get_mx_records(self, domain: str) -> list[str]:
         """Return MX hosts sorted by preference (lowest number = try first)."""
@@ -116,14 +125,15 @@ class SMTPVerifier:
         return None
 
     async def _smtp_rcpt(
-        self, mx_host: str, email: str
+        self, mx_host: str, email: str, source_ip: str | None = None
     ) -> tuple[int | None, str | None]:
         """Open SMTP connection, RCPT TO, return (code, message). Best-effort cleanup."""
         smtp = aiosmtplib.SMTP(
             hostname=mx_host,
             port=25,
             timeout=self.smtp_timeout,
-            local_hostname=self.helo_hostname,
+            local_hostname=self._helo_for(source_ip),
+            source_address=(source_ip, 0) if source_ip else None,
         )
         try:
             await smtp.connect()
@@ -141,7 +151,7 @@ class SMTPVerifier:
                 except Exception:
                     pass
 
-    async def verify_email(self, email: str) -> VerifyResult:
+    async def verify_email(self, email: str, source_ip: str | None = None) -> VerifyResult:
         """Verify a single email via SMTP RCPT TO."""
         if "@" not in email:
             return VerifyResult(email=email, status="unknown",
@@ -156,11 +166,19 @@ class SMTPVerifier:
         last_error: str | None = None
         for host in mx_hosts:
             try:
-                code, msg = await self._smtp_rcpt(host, email)
+                code, msg = await self._smtp_rcpt(host, email, source_ip=source_ip)
             except (asyncio.TimeoutError, socket.gaierror, aiosmtplib.SMTPException,
                     OSError, ConnectionError) as e:
                 last_error = f"{type(e).__name__}: {e}"
-                logger.debug("SMTP attempt to %s for %s failed: %s", host, email, e)
+                # OSError on bind = source IP not configured on this host
+                if isinstance(e, OSError) and source_ip and "assign" in str(e).lower():
+                    logger.warning(
+                        "SMTP source_address bind failed for IP %s (not configured on host?): %s",
+                        source_ip, e,
+                    )
+                else:
+                    logger.debug("SMTP attempt to %s from %s for %s failed: %s",
+                                 host, source_ip or "default", email, e)
                 continue
 
             if code is None:
@@ -179,11 +197,11 @@ class SMTPVerifier:
         return VerifyResult(email=email, status="unknown",
                             response_message=last_error or "All MX hosts unreachable")
 
-    async def is_catch_all(self, domain: str) -> bool:
+    async def is_catch_all(self, domain: str, source_ip: str | None = None) -> bool:
         """Probe with a clearly-bogus address. If the server accepts it, catch-all."""
         rnd = "".join(random.choices(string.ascii_lowercase + string.digits, k=24))
         bogus = f"zzz_nope_{rnd}@{domain}"
-        result = await self.verify_email(bogus)
+        result = await self.verify_email(bogus, source_ip=source_ip)
         return result.status == "verified"
 
 
