@@ -160,6 +160,7 @@ export default function BatchPage() {
               candidates_tried: event.candidates_tried,
               message: event.message,
               fallback_recommended: event.fallback_recommended,
+              mail_provider: event.mail_provider ?? null,
             };
             setResults(prev => {
               const updated = prev.map((r, i) =>

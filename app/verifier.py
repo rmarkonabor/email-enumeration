@@ -72,7 +72,9 @@ class EmailFinder:
             catch_all = await self.verifier.is_catch_all(domain)
             self.cache.set_catch_all(domain, catch_all)
         if catch_all:
-            return FindResult(email=None, status="catch_all", catch_all=True,
+            best_guess = generate_permutations(first_name, last_name, domain, middle_name)
+            return FindResult(email=best_guess[0] if best_guess else None,
+                              status="catch_all", catch_all=True,
                               candidates_tried=0, mail_provider=mail_provider)
 
         candidates = generate_permutations(first_name, last_name, domain, middle_name)
@@ -173,11 +175,13 @@ class EmailFinder:
             self.cache.set_catch_all(domain, catch_all)
         yield {"type": "catch_all", "catch_all": catch_all, "cached": cached_ca}
 
+        candidates = generate_permutations(first_name, last_name, domain, middle_name)
+
         if catch_all:
-            yield _done_event(None, "catch_all", True, [], True, mail_provider)
+            best_guess = candidates[0] if candidates else None
+            yield _done_event(best_guess, "catch_all", True, [], True, mail_provider)
             return
 
-        candidates = generate_permutations(first_name, last_name, domain, middle_name)
         yield {"type": "candidates", "count": len(candidates)}
         attempts: list[dict] = []
 
