@@ -55,6 +55,7 @@ WARMUP_MAX = int(os.getenv("WARMUP_MAX_VOLUME", "1500"))
 WARMUP_DAYS_TO_MAX = int(os.getenv("WARMUP_DAYS_TO_MAX", "60"))
 WARMUP_SOFT_BLOCK_THRESHOLD = float(os.getenv("WARMUP_SOFT_BLOCK_THRESHOLD", "0.05"))
 WARMUP_PER_DOMAIN_CAP = int(os.getenv("WARMUP_PER_DOMAIN_CAP", "40"))
+SMTP_SOURCE_IPS = [ip.strip() for ip in os.getenv("SMTP_SOURCE_IPS", "").split(",") if ip.strip()]
 
 
 def _rate_key(request: Request) -> str:
@@ -100,12 +101,13 @@ async def lifespan(app: FastAPI):
         days_to_max=WARMUP_DAYS_TO_MAX,
         soft_block_threshold=WARMUP_SOFT_BLOCK_THRESHOLD,
         per_domain_cap=WARMUP_PER_DOMAIN_CAP,
+        source_ips=SMTP_SOURCE_IPS,
     )
     app.state.metrics = metrics
     app.state.warmup = warmup
     app.state.finder = EmailFinder(
         verifier=verifier, cache=cache, pacing_seconds=PACING_SECONDS,
-        metrics=metrics, warmup=warmup,
+        metrics=metrics, warmup=warmup, source_ips=SMTP_SOURCE_IPS,
     )
 
     # Run once on startup so a restart actually clears anything overdue,
@@ -115,7 +117,7 @@ async def lifespan(app: FastAPI):
         logger.info("Startup cache purge: removed %d expired domains, %d expired emails", initial_d, initial_e)
     purge_task = asyncio.create_task(_purge_loop(cache, 60 * 60 * 24))
 
-    logger.info("Email finder started. db=%s helo=%s", DB_PATH, HELO_HOSTNAME)
+    logger.info("Email finder started. db=%s helo=%s smtp_ips=%s", DB_PATH, HELO_HOSTNAME, SMTP_SOURCE_IPS or ["default"])
     if not API_KEY:
         logger.warning("API_KEY env var is empty. All requests will be rejected.")
     try:

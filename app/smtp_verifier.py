@@ -116,7 +116,7 @@ class SMTPVerifier:
         return None
 
     async def _smtp_rcpt(
-        self, mx_host: str, email: str
+        self, mx_host: str, email: str, source_ip: str | None = None
     ) -> tuple[int | None, str | None]:
         """Open SMTP connection, RCPT TO, return (code, message). Best-effort cleanup."""
         smtp = aiosmtplib.SMTP(
@@ -124,6 +124,7 @@ class SMTPVerifier:
             port=25,
             timeout=self.smtp_timeout,
             local_hostname=self.helo_hostname,
+            source_address=(source_ip, 0) if source_ip else None,
         )
         try:
             await smtp.connect()
@@ -141,7 +142,7 @@ class SMTPVerifier:
                 except Exception:
                     pass
 
-    async def verify_email(self, email: str) -> VerifyResult:
+    async def verify_email(self, email: str, source_ip: str | None = None) -> VerifyResult:
         """Verify a single email via SMTP RCPT TO."""
         if "@" not in email:
             return VerifyResult(email=email, status="unknown",
@@ -156,7 +157,7 @@ class SMTPVerifier:
         last_error: str | None = None
         for host in mx_hosts:
             try:
-                code, msg = await self._smtp_rcpt(host, email)
+                code, msg = await self._smtp_rcpt(host, email, source_ip=source_ip)
             except (asyncio.TimeoutError, socket.gaierror, aiosmtplib.SMTPException,
                     OSError, ConnectionError) as e:
                 last_error = f"{type(e).__name__}: {e}"
@@ -179,11 +180,11 @@ class SMTPVerifier:
         return VerifyResult(email=email, status="unknown",
                             response_message=last_error or "All MX hosts unreachable")
 
-    async def is_catch_all(self, domain: str) -> bool:
+    async def is_catch_all(self, domain: str, source_ip: str | None = None) -> bool:
         """Probe with a clearly-bogus address. If the server accepts it, catch-all."""
         rnd = "".join(random.choices(string.ascii_lowercase + string.digits, k=24))
         bogus = f"zzz_nope_{rnd}@{domain}"
-        result = await self.verify_email(bogus)
+        result = await self.verify_email(bogus, source_ip=source_ip)
         return result.status == "verified"
 
 

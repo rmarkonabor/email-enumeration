@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 import time
 from collections.abc import AsyncGenerator
@@ -53,12 +54,39 @@ class EmailFinder:
         pacing_seconds: float = 0.3,
         metrics: Metrics | None = None,
         warmup: Warmup | None = None,
+        source_ips: list[str] | None = None,
     ) -> None:
         self.verifier = verifier
         self.cache = cache
         self.pacing_seconds = pacing_seconds
         self.metrics = metrics
         self.warmup = warmup
+        self.source_ips = source_ips or []
+        self._ip_iter = itertools.cycle(self.source_ips) if self.source_ips else None
+
+    def _pick_source_ip(self, domain: str) -> tuple[str | None, str | None]:
+        """Round-robin across source IPs, skipping any that are capped/paused.
+
+        Returns (source_ip, block_reason). block_reason is None when allowed.
+        source_ip is None when using the default OS-selected IP (single-IP mode).
+        """
+        if not self.source_ips:
+            if self.warmup:
+                allowed, reason = self.warmup.can_attempt(domain)
+                return (None, reason if not allowed else None)
+            return None, None
+
+        # Try each IP once in rotation order; return first available
+        for _ in range(len(self.source_ips)):
+            ip = next(self._ip_iter)
+            if self.warmup:
+                allowed, reason = self.warmup.can_attempt(domain, source_ip=ip)
+                if allowed:
+                    return ip, None
+            else:
+                return ip, None
+
+        return None, "all_ips_capped"
 
     # ------------------------------------------------------------------ SMTP
     async def find(
@@ -82,7 +110,8 @@ class EmailFinder:
 
         catch_all = self.cache.get_catch_all(domain)
         if catch_all is None:
-            catch_all = await self.verifier.is_catch_all(domain)
+            ca_ip = self.source_ips[0] if self.source_ips else None
+            catch_all = await self.verifier.is_catch_all(domain, source_ip=ca_ip)
             self.cache.set_catch_all(domain, catch_all)
         if catch_all:
             best_guess = generate_permutations(first_name, last_name, domain, middle_name)
@@ -105,18 +134,17 @@ class EmailFinder:
                 attempts.append({"email": candidate, "status": "not_found"})
                 continue
 
-            if self.warmup is not None:
-                allowed, reason = self.warmup.can_attempt(domain)
-                if not allowed:
-                    attempts.append({"email": candidate, "status": "throttled", "reason": reason})
-                    break  # No point trying more candidates today
+            source_ip, block_reason = self._pick_source_ip(domain)
+            if block_reason is not None:
+                attempts.append({"email": candidate, "status": "throttled", "reason": block_reason})
+                break
 
             t0 = time.perf_counter()
-            result = await self.verifier.verify_email(candidate)
+            result = await self.verifier.verify_email(candidate, source_ip=source_ip)
             response_ms = int((time.perf_counter() - t0) * 1000)
             self.cache.set_verified(candidate, result.status)
             if self.warmup is not None:
-                self.warmup.record_attempt(result.response_code, domain)
+                self.warmup.record_attempt(result.response_code, domain, source_ip=source_ip or "")
             if self.metrics is not None:
                 self.metrics.log_result("smtp", candidate, result.status, result.response_code, response_ms)
             attempts.append({"email": candidate, "status": result.status, "code": result.response_code})
@@ -207,7 +235,8 @@ class EmailFinder:
         catch_all = self.cache.get_catch_all(domain)
         cached_ca = catch_all is not None
         if catch_all is None:
-            catch_all = await self.verifier.is_catch_all(domain)
+            ca_ip = self.source_ips[0] if self.source_ips else None
+            catch_all = await self.verifier.is_catch_all(domain, source_ip=ca_ip)
             self.cache.set_catch_all(domain, catch_all)
         yield {"type": "catch_all", "catch_all": catch_all, "cached": cached_ca}
 
@@ -236,20 +265,19 @@ class EmailFinder:
                 yield {"type": "attempt", **attempt}
                 continue
 
-            if self.warmup is not None:
-                allowed, reason = self.warmup.can_attempt(domain)
-                if not allowed:
-                    attempt = {"email": candidate, "status": "throttled", "reason": reason}
-                    attempts.append(attempt)
-                    yield {"type": "attempt", **attempt}
-                    break
+            source_ip, block_reason = self._pick_source_ip(domain)
+            if block_reason is not None:
+                attempt = {"email": candidate, "status": "throttled", "reason": block_reason}
+                attempts.append(attempt)
+                yield {"type": "attempt", **attempt}
+                break
 
             t0 = time.perf_counter()
-            result = await self.verifier.verify_email(candidate)
+            result = await self.verifier.verify_email(candidate, source_ip=source_ip)
             response_ms = int((time.perf_counter() - t0) * 1000)
             self.cache.set_verified(candidate, result.status)
             if self.warmup is not None:
-                self.warmup.record_attempt(result.response_code, domain)
+                self.warmup.record_attempt(result.response_code, domain, source_ip=source_ip or "")
             if self.metrics is not None:
                 self.metrics.log_result("smtp", candidate, result.status, result.response_code, response_ms)
             attempt = {"email": candidate, "status": result.status, "code": result.response_code}

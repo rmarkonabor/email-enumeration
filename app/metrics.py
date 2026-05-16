@@ -8,6 +8,9 @@ Two responsibilities, one SQLite database (shared with the cache):
    WARMUP_SOFT_BLOCK_THRESHOLD after a minimum sample size, SMTP is paused
    for the rest of the UTC day.
 
+   Multiple source IPs are tracked independently — each IP gets its own
+   daily cap and circuit breaker. Total daily capacity = cap_per_ip × num_ips.
+
 2. **Metrics**: log every verification attempt (SMTP or third-party) and
    accept user feedback ("you said verified but the email bounces") so we
    can measure real-world accuracy.
@@ -55,24 +58,79 @@ CREATE TABLE IF NOT EXISTS verification_feedback (
 CREATE INDEX IF NOT EXISTS idx_vf_email ON verification_feedback (email);
 
 CREATE TABLE IF NOT EXISTS smtp_daily_counters (
-    day TEXT PRIMARY KEY,
+    day TEXT NOT NULL,
+    source_ip TEXT NOT NULL DEFAULT '',
     attempts INTEGER NOT NULL DEFAULT 0,
     soft_blocks INTEGER NOT NULL DEFAULT 0,
-    paused INTEGER NOT NULL DEFAULT 0
+    paused INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, source_ip)
 );
+CREATE INDEX IF NOT EXISTS idx_sdc_day ON smtp_daily_counters (day);
 
 CREATE TABLE IF NOT EXISTS smtp_domain_daily (
     day TEXT NOT NULL,
+    source_ip TEXT NOT NULL DEFAULT '',
     domain TEXT NOT NULL,
     attempts INTEGER NOT NULL DEFAULT 0,
     soft_blocks INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (day, domain)
+    PRIMARY KEY (day, source_ip, domain)
 );
+CREATE INDEX IF NOT EXISTS idx_sdd_day ON smtp_domain_daily (day);
 """
 
 
 def _today() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
+
+
+def _migrate_db(conn: sqlite3.Connection) -> None:
+    """Migrate smtp tables from single-IP schema (day PK) to per-IP schema (day, source_ip PK)."""
+    tbl = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='smtp_daily_counters'"
+    ).fetchone()
+    if not tbl:
+        return  # Fresh install — SCHEMA will create the new tables
+
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(smtp_daily_counters)").fetchall()}
+    if "source_ip" in cols:
+        return  # Already on new schema
+
+    logger.info("Migrating smtp_daily_counters and smtp_domain_daily to per-IP schema...")
+    conn.executescript("""
+        ALTER TABLE smtp_daily_counters RENAME TO _smtp_daily_v1;
+        ALTER TABLE smtp_domain_daily RENAME TO _smtp_domain_v1;
+
+        CREATE TABLE smtp_daily_counters (
+            day TEXT NOT NULL,
+            source_ip TEXT NOT NULL DEFAULT '',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            soft_blocks INTEGER NOT NULL DEFAULT 0,
+            paused INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (day, source_ip)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sdc_day ON smtp_daily_counters (day);
+
+        CREATE TABLE smtp_domain_daily (
+            day TEXT NOT NULL,
+            source_ip TEXT NOT NULL DEFAULT '',
+            domain TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            soft_blocks INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (day, source_ip, domain)
+        );
+        CREATE INDEX IF NOT EXISTS idx_sdd_day ON smtp_domain_daily (day);
+
+        INSERT INTO smtp_daily_counters (day, source_ip, attempts, soft_blocks, paused)
+        SELECT day, '', attempts, soft_blocks, paused FROM _smtp_daily_v1;
+
+        INSERT INTO smtp_domain_daily (day, source_ip, domain, attempts, soft_blocks)
+        SELECT day, '', domain, attempts, soft_blocks FROM _smtp_domain_v1;
+
+        DROP TABLE _smtp_daily_v1;
+        DROP TABLE _smtp_domain_v1;
+    """)
+    conn.commit()
+    logger.info("Migration complete.")
 
 
 class Metrics:
@@ -91,6 +149,7 @@ class Metrics:
     def _init_db(self) -> None:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
+            _migrate_db(conn)
             conn.executescript(SCHEMA)
 
     # --- writes ---
@@ -162,7 +221,7 @@ class Metrics:
 
 
 class Warmup:
-    """SMTP IP warm-up: daily cap + soft-block circuit breaker."""
+    """SMTP IP warm-up: daily cap + soft-block circuit breaker, tracked per source IP."""
 
     def __init__(
         self,
@@ -173,6 +232,7 @@ class Warmup:
         soft_block_threshold: float = 0.05,
         min_sample_before_breaker: int = 50,
         per_domain_cap: int = 40,
+        source_ips: list[str] | None = None,
     ) -> None:
         self.db_path = str(db_path)
         self.start = start
@@ -181,9 +241,11 @@ class Warmup:
         self.soft_block_threshold = soft_block_threshold
         self.min_sample = min_sample_before_breaker
         self.per_domain_cap = per_domain_cap
+        self.source_ips = source_ips or []
         self.started_at = int(time.time())
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
+            _migrate_db(conn)
             conn.executescript(SCHEMA)
 
     def _conn(self) -> sqlite3.Connection:
@@ -195,42 +257,48 @@ class Warmup:
         return max(0, int((time.time() - self.started_at) // 86400))
 
     def current_cap(self) -> int:
+        """Per-IP daily cap based on days since startup."""
         d = self._days_elapsed()
         if d >= self.days_to_max:
             return self.max_cap
         return self.start + int((self.max_cap - self.start) * d / self.days_to_max)
 
-    def _ensure_today(self, conn: sqlite3.Connection) -> tuple[int, int, int]:
+    def total_cap(self) -> int:
+        """Total daily cap across all configured IPs."""
+        return self.current_cap() * max(1, len(self.source_ips))
+
+    def _ensure_today(self, conn: sqlite3.Connection, source_ip: str = "") -> tuple[int, int, int]:
         day = _today()
         row = conn.execute(
-            "SELECT attempts, soft_blocks, paused FROM smtp_daily_counters WHERE day = ?",
-            (day,),
+            "SELECT attempts, soft_blocks, paused FROM smtp_daily_counters WHERE day = ? AND source_ip = ?",
+            (day, source_ip),
         ).fetchone()
         if row is None:
             conn.execute(
-                "INSERT INTO smtp_daily_counters (day, attempts, soft_blocks, paused) "
-                "VALUES (?, 0, 0, 0)",
-                (day,),
+                "INSERT INTO smtp_daily_counters (day, source_ip, attempts, soft_blocks, paused) "
+                "VALUES (?, ?, 0, 0, 0)",
+                (day, source_ip),
             )
             conn.commit()
             return (0, 0, 0)
         return row
 
-    def _domain_today(self, conn: sqlite3.Connection, domain: str) -> tuple[int, int]:
+    def _domain_today(self, conn: sqlite3.Connection, domain: str, source_ip: str = "") -> tuple[int, int]:
         row = conn.execute(
-            "SELECT attempts, soft_blocks FROM smtp_domain_daily WHERE day = ? AND domain = ?",
-            (_today(), domain),
+            "SELECT attempts, soft_blocks FROM smtp_domain_daily "
+            "WHERE day = ? AND source_ip = ? AND domain = ?",
+            (_today(), source_ip, domain),
         ).fetchone()
         return row if row else (0, 0)
 
-    def can_attempt(self, target_domain: str | None = None) -> tuple[bool, str | None]:
-        """Returns (allowed, reason_if_blocked)."""
+    def can_attempt(self, target_domain: str | None = None, source_ip: str = "") -> tuple[bool, str | None]:
+        """Returns (allowed, reason_if_blocked). Checks counters for the given source IP."""
         with self._conn() as conn:
-            attempts, _soft, paused = self._ensure_today(conn)
+            attempts, _soft, paused = self._ensure_today(conn, source_ip)
             domain_attempts = 0
             domain_soft = 0
             if target_domain:
-                domain_attempts, domain_soft = self._domain_today(conn, target_domain)
+                domain_attempts, domain_soft = self._domain_today(conn, target_domain, source_ip)
         if paused:
             return False, "smtp_soft_block_circuit_open"
         if attempts >= self.current_cap():
@@ -238,66 +306,97 @@ class Warmup:
         if target_domain and domain_attempts >= self.per_domain_cap:
             return False, f"smtp_per_domain_cap_reached:{target_domain}"
         if target_domain and domain_attempts >= 10 and domain_soft >= 3:
-            # Per-domain mini circuit breaker: 3+ soft blocks against a single
-            # recipient domain means that MX is throttling us; back off.
             return False, f"smtp_per_domain_soft_block:{target_domain}"
         return True, None
 
-    def record_attempt(self, smtp_code: int | None, target_domain: str | None = None) -> None:
+    def record_attempt(
+        self, smtp_code: int | None, target_domain: str | None = None, source_ip: str = ""
+    ) -> None:
         is_soft = 1 if (smtp_code in SOFT_BLOCK_CODES) else 0
         day = _today()
         with self._conn() as conn:
-            self._ensure_today(conn)
+            self._ensure_today(conn, source_ip)
             conn.execute(
                 "UPDATE smtp_daily_counters "
                 "SET attempts = attempts + 1, soft_blocks = soft_blocks + ? "
-                "WHERE day = ?",
-                (is_soft, day),
+                "WHERE day = ? AND source_ip = ?",
+                (is_soft, day, source_ip),
             )
             if target_domain:
                 conn.execute(
-                    "INSERT INTO smtp_domain_daily (day, domain, attempts, soft_blocks) "
-                    "VALUES (?, ?, 1, ?) "
-                    "ON CONFLICT(day, domain) DO UPDATE SET "
+                    "INSERT INTO smtp_domain_daily (day, source_ip, domain, attempts, soft_blocks) "
+                    "VALUES (?, ?, ?, 1, ?) "
+                    "ON CONFLICT(day, source_ip, domain) DO UPDATE SET "
                     "  attempts = attempts + 1, soft_blocks = soft_blocks + ?",
-                    (day, target_domain, is_soft, is_soft),
+                    (day, source_ip, target_domain, is_soft, is_soft),
                 )
             row = conn.execute(
-                "SELECT attempts, soft_blocks FROM smtp_daily_counters WHERE day = ?",
-                (day,),
+                "SELECT attempts, soft_blocks FROM smtp_daily_counters WHERE day = ? AND source_ip = ?",
+                (day, source_ip),
             ).fetchone()
             attempts, soft_blocks = row
             if attempts >= self.min_sample and (soft_blocks / attempts) > self.soft_block_threshold:
                 conn.execute(
-                    "UPDATE smtp_daily_counters SET paused = 1 WHERE day = ?",
-                    (day,),
+                    "UPDATE smtp_daily_counters SET paused = 1 WHERE day = ? AND source_ip = ?",
+                    (day, source_ip),
                 )
+                ip_label = source_ip or "default"
                 logger.warning(
-                    "SMTP circuit breaker open: %d/%d soft blocks today (%.1f%% > %.1f%% threshold). Pausing SMTP for the rest of the UTC day.",
-                    soft_blocks, attempts, 100 * soft_blocks / attempts, 100 * self.soft_block_threshold,
+                    "SMTP circuit breaker open for IP %s: %d/%d soft blocks today "
+                    "(%.1f%% > %.1f%% threshold). Pausing that IP for the rest of the UTC day.",
+                    ip_label, soft_blocks, attempts,
+                    100 * soft_blocks / attempts, 100 * self.soft_block_threshold,
                 )
             conn.commit()
 
     def today_stats(self) -> dict:
+        day = _today()
         with self._conn() as conn:
-            attempts, soft_blocks, paused = self._ensure_today(conn)
-            top_domains = conn.execute(
-                "SELECT domain, attempts, soft_blocks FROM smtp_domain_daily "
-                "WHERE day = ? ORDER BY attempts DESC LIMIT 10",
-                (_today(),),
+            agg = conn.execute(
+                "SELECT COALESCE(SUM(attempts),0), COALESCE(SUM(soft_blocks),0), COALESCE(MAX(paused),0) "
+                "FROM smtp_daily_counters WHERE day = ?",
+                (day,),
+            ).fetchone()
+            attempts, soft_blocks, paused = agg
+
+            ip_rows = conn.execute(
+                "SELECT source_ip, attempts, soft_blocks, paused "
+                "FROM smtp_daily_counters WHERE day = ? ORDER BY source_ip",
+                (day,),
             ).fetchall()
-        cap = self.current_cap()
+
+            top_domains = conn.execute(
+                "SELECT domain, SUM(attempts) AS a, SUM(soft_blocks) AS s "
+                "FROM smtp_domain_daily WHERE day = ? GROUP BY domain ORDER BY a DESC LIMIT 10",
+                (day,),
+            ).fetchall()
+
+        cap_per_ip = self.current_cap()
+        total = self.total_cap()
         return {
-            "day": _today(),
+            "day": day,
             "attempts": attempts,
             "soft_blocks": soft_blocks,
             "soft_block_pct": round(100.0 * soft_blocks / attempts, 1) if attempts else 0.0,
-            "cap": cap,
-            "remaining": max(0, cap - attempts),
+            "cap_per_ip": cap_per_ip,
+            "cap": total,
+            "remaining": max(0, total - attempts),
             "paused": bool(paused),
             "per_domain_cap": self.per_domain_cap,
             "day_in_warmup": min(self._days_elapsed(), self.days_to_max),
             "days_to_max": self.days_to_max,
+            "source_ip_count": max(1, len(self.source_ips)),
+            "per_ip": [
+                {
+                    "source_ip": ip or "default",
+                    "attempts": a,
+                    "soft_blocks": s,
+                    "paused": bool(p),
+                    "cap": cap_per_ip,
+                    "remaining": max(0, cap_per_ip - a),
+                }
+                for ip, a, s, p in ip_rows
+            ],
             "top_domains_today": [
                 {"domain": d, "attempts": a, "soft_blocks": s} for d, a, s in top_domains
             ],
