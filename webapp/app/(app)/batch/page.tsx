@@ -161,6 +161,7 @@ export default function BatchPage() {
               message: event.message,
               fallback_recommended: event.fallback_recommended,
               mail_provider: event.mail_provider ?? null,
+              credits_used: event.credits_used ?? 0,
             };
             setResults(prev => {
               const updated = prev.map((r, i) =>
@@ -206,6 +207,7 @@ export default function BatchPage() {
 
   const validCount = rows.filter(r => r.first_name && r.last_name && r.domain).length;
   const doneResults = results.filter(r => r.state === "done");
+  const totalCredits = doneResults.reduce((sum, r) => sum + (r.response.credits_used ?? 0), 0);
 
   return (
     <div>
@@ -289,6 +291,11 @@ export default function BatchPage() {
               </h2>
               {loading && eta && (
                 <span className="text-xs text-slate-400">~{eta} remaining</span>
+              )}
+              {totalCredits > 0 && (
+                <span className="text-xs px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-100 font-medium">
+                  {totalCredits} API credit{totalCredits !== 1 ? "s" : ""} used
+                </span>
               )}
             </div>
             {doneResults.length > 0 && (

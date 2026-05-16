@@ -114,6 +114,7 @@ class FindResponse(BaseModel):
     message: str | None = None
     fallback_recommended: bool
     mail_provider: str | None = None
+    credits_used: int = 0
 
 
 class BatchRequest(BaseModel):
@@ -152,6 +153,7 @@ def _to_response(result, return_attempts: bool) -> FindResponse:
         message=message,
         fallback_recommended=fallback,
         mail_provider=result.mail_provider,
+        credits_used=result.credits_used,
     )
 
 

@@ -32,6 +32,12 @@ export default function ResultCard({ result, request }: { result: FindResponse; 
           <span className="text-slate-400 text-xs uppercase tracking-wide font-medium">Fallback needed</span>
           <p className="text-slate-700 mt-0.5">{result.fallback_recommended ? "Yes" : "No"}</p>
         </div>
+        {result.credits_used !== undefined && result.credits_used > 0 && (
+          <div>
+            <span className="text-slate-400 text-xs uppercase tracking-wide font-medium">API credits used</span>
+            <p className="text-slate-700 mt-0.5">{result.credits_used}</p>
+          </div>
+        )}
       </div>
 
       {result.message && (

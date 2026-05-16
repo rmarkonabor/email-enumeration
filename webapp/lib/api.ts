@@ -15,6 +15,7 @@ export interface FindResponse {
   message: string | null;
   fallback_recommended: boolean;
   mail_provider?: string | null;
+  credits_used?: number;
 }
 
 export interface BatchResponse {

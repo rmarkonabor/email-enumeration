@@ -22,9 +22,10 @@ class FindResult:
     candidates_tried: int
     attempts: list[dict] = field(default_factory=list)
     mail_provider: str | None = None
+    credits_used: int = 0
 
 
-def _done_event(email, status, catch_all, attempts, fallback, mail_provider=None) -> dict:
+def _done_event(email, status, catch_all, attempts, fallback, mail_provider=None, credits_used=0) -> dict:
     return {
         "type": "done",
         "email": email,
@@ -33,6 +34,7 @@ def _done_event(email, status, catch_all, attempts, fallback, mail_provider=None
         "candidates_tried": len(attempts),
         "attempts": attempts,
         "mail_provider": mail_provider,
+        "credits_used": credits_used,
         "message": None if status == "verified" else (
             "Domain is catch-all; cannot confirm via SMTP." if status == "catch_all"
             else "No candidate verified. Consider a paid enrichment tool."
@@ -123,26 +125,33 @@ class EmailFinder:
         mail_provider = await self.verifier.detect_mail_provider(domain)
         candidates = generate_permutations(first_name, last_name, domain, middle_name)
         attempts: list[dict] = []
+        credits_used = 0
 
         for candidate in candidates:
-            status = await verify_third_party(candidate, provider, provider_key)
+            status, billed = await verify_third_party(candidate, provider, provider_key)
+            if billed:
+                credits_used += 1
             attempts.append({"email": candidate, "status": status, "provider": provider})
 
             if status == "verified":
                 return FindResult(email=candidate, status="verified", catch_all=False,
                                   candidates_tried=len(attempts),
                                   attempts=attempts if return_attempts else [],
-                                  mail_provider=mail_provider)
+                                  mail_provider=mail_provider,
+                                  credits_used=credits_used)
             if status == "catch_all":
-                return FindResult(email=None, status="catch_all", catch_all=True,
+                return FindResult(email=candidates[0] if candidates else None,
+                                  status="catch_all", catch_all=True,
                                   candidates_tried=len(attempts),
                                   attempts=attempts if return_attempts else [],
-                                  mail_provider=mail_provider)
+                                  mail_provider=mail_provider,
+                                  credits_used=credits_used)
 
         return FindResult(email=None, status="not_found", catch_all=False,
                           candidates_tried=len(attempts),
                           attempts=attempts if return_attempts else [],
-                          mail_provider=mail_provider)
+                          mail_provider=mail_provider,
+                          credits_used=credits_used)
 
     # --------------------------------------------------------- SMTP stream
     async def find_stream(
@@ -234,22 +243,25 @@ class EmailFinder:
         candidates = generate_permutations(first_name, last_name, domain, middle_name)
         yield {"type": "candidates", "count": len(candidates)}
         attempts: list[dict] = []
+        credits_used = 0
 
         for candidate in candidates:
             yield {"type": "trying", "email": candidate}
-            status = await verify_third_party(candidate, provider, provider_key)
+            status, billed = await verify_third_party(candidate, provider, provider_key)
+            if billed:
+                credits_used += 1
             attempt = {"email": candidate, "status": status, "provider": provider}
             attempts.append(attempt)
             yield {"type": "attempt", **attempt}
 
             if status == "verified":
-                yield _done_event(candidate, "verified", False, attempts, False, mail_provider)
+                yield _done_event(candidate, "verified", False, attempts, False, mail_provider, credits_used)
                 return
             if status == "catch_all":
-                yield _done_event(None, "catch_all", True, attempts, True, mail_provider)
+                yield _done_event(candidates[0], "catch_all", True, attempts, True, mail_provider, credits_used)
                 return
 
-        yield _done_event(None, "not_found", False, attempts, True, mail_provider)
+        yield _done_event(None, "not_found", False, attempts, True, mail_provider, credits_used)
 
 
 __all__ = ["EmailFinder", "FindResult"]

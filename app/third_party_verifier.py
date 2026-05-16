@@ -11,8 +11,8 @@ _ZEROBOUNCE_URL = "https://api.zerobounce.net/v2/validate"
 _REOON_URL = "https://emailverifier.reoon.com/api/v1/verify"
 
 
-async def verify_zerobounce(email: str, api_key: str) -> str:
-    """Returns 'verified', 'not_found', 'catch_all', or 'unknown'."""
+async def verify_zerobounce(email: str, api_key: str) -> tuple[str, bool]:
+    """Returns (status, billed) where billed indicates an API credit was consumed."""
     try:
         async with httpx.AsyncClient() as client:
             r = await client.get(
@@ -23,19 +23,19 @@ async def verify_zerobounce(email: str, api_key: str) -> str:
             r.raise_for_status()
             status = r.json().get("status", "").lower()
         if status == "valid":
-            return "verified"
+            return "verified", True
         if status in ("invalid", "do_not_mail", "spamtrap", "abuse"):
-            return "not_found"
+            return "not_found", True
         if status == "catch-all":
-            return "catch_all"
-        return "unknown"
+            return "catch_all", True
+        return "unknown", True
     except Exception as e:
         logger.warning("ZeroBounce error for %s: %s", email, e)
-        return "unknown"
+        return "unknown", False
 
 
-async def verify_reoon(email: str, api_key: str) -> str:
-    """Returns 'verified', 'not_found', 'catch_all', or 'unknown'.
+async def verify_reoon(email: str, api_key: str) -> tuple[str, bool]:
+    """Returns (status, billed) where billed indicates an API credit was consumed.
 
     Reoon power-mode response 'status' values:
       safe | invalid | catch_all | risky | unknown | disposable |
@@ -53,18 +53,18 @@ async def verify_reoon(email: str, api_key: str) -> str:
         status = (data.get("status") or "").lower()
         logger.info("Reoon %s -> %s", email, status or data)
         if status == "safe":
-            return "verified"
+            return "verified", True
         if status in ("invalid", "disposable", "spamtrap", "disabled"):
-            return "not_found"
+            return "not_found", True
         if status == "catch_all" or data.get("is_catch_all") or data.get("is_catchall"):
-            return "catch_all"
-        return "unknown"
+            return "catch_all", True
+        return "unknown", True
     except Exception as e:
         logger.warning("Reoon error for %s: %s", email, e)
-        return "unknown"
+        return "unknown", False
 
 
-async def verify_third_party(email: str, provider: str, api_key: str) -> str:
+async def verify_third_party(email: str, provider: str, api_key: str) -> tuple[str, bool]:
     if provider == "zerobounce":
         return await verify_zerobounce(email, api_key)
     if provider == "reoon":

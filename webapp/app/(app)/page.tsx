@@ -76,6 +76,8 @@ export default function SinglePage() {
           attempts: event.attempts,
           message: event.message,
           fallback_recommended: event.fallback_recommended,
+          mail_provider: event.mail_provider ?? null,
+          credits_used: event.credits_used ?? 0,
         };
         setResult(res);
         const req: FindRequest = {
