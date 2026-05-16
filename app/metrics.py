@@ -349,6 +349,28 @@ class Warmup:
                 )
             conn.commit()
 
+    def is_pool_exhausted(self) -> bool:
+        """True if every configured source IP has hit its daily cap or tripped
+        its circuit breaker for today.
+
+        Used to decide whether to reject new SMTP requests with HTTP 503.
+        Cached results don't go through this check.
+        """
+        cap = self.current_cap()
+        ips_to_check = self.source_ips or [""]
+        with self._conn() as conn:
+            for ip in ips_to_check:
+                row = conn.execute(
+                    "SELECT attempts, paused FROM smtp_daily_counters WHERE day = ? AND source_ip = ?",
+                    (_today(), ip),
+                ).fetchone()
+                if row is None:
+                    return False  # IP has no attempts yet => capacity available
+                attempts, paused = row
+                if not paused and attempts < cap:
+                    return False
+        return True
+
     def today_stats(self) -> dict:
         day = _today()
         with self._conn() as conn:

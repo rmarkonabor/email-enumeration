@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class FindResult:
     email: str | None
-    status: str  # 'verified' | 'catch_all' | 'not_found'
+    status: str  # 'verified' | 'catch_all' | 'not_found' | 'throttled'
     catch_all: bool
     candidates_tried: int
     attempts: list[dict] = field(default_factory=list)
@@ -29,6 +29,14 @@ class FindResult:
 
 
 def _done_event(email, status, catch_all, attempts, fallback, mail_provider=None, credits_used=0) -> dict:
+    if status == "verified":
+        message = None
+    elif status == "catch_all":
+        message = "Domain is catch-all; cannot confirm via SMTP."
+    elif status == "throttled":
+        message = "SMTP rate limit hit before verification could complete. Retry later or use a third-party provider."
+    else:
+        message = "No candidate verified. Consider a paid enrichment tool."
     return {
         "type": "done",
         "email": email,
@@ -38,10 +46,7 @@ def _done_event(email, status, catch_all, attempts, fallback, mail_provider=None
         "attempts": attempts,
         "mail_provider": mail_provider,
         "credits_used": credits_used,
-        "message": None if status == "verified" else (
-            "Domain is catch-all; cannot confirm via SMTP." if status == "catch_all"
-            else "No candidate verified. Consider a paid enrichment tool."
-        ),
+        "message": message,
         "fallback_recommended": fallback,
     }
 
@@ -112,7 +117,7 @@ class EmailFinder:
         if catch_all is None:
             ca_ip, block_reason = self._pick_source_ip(domain)
             if block_reason is not None:
-                return FindResult(email=None, status="not_found", catch_all=False,
+                return FindResult(email=None, status="throttled", catch_all=False,
                                   candidates_tried=0,
                                   attempts=[{"status": "throttled", "reason": block_reason}] if return_attempts else [],
                                   mail_provider=mail_provider)
@@ -128,6 +133,7 @@ class EmailFinder:
 
         candidates = generate_permutations(first_name, last_name, domain, middle_name)
         attempts: list[dict] = []
+        throttled = False
 
         for candidate in candidates:
             cached = self.cache.get_verified(candidate)
@@ -144,6 +150,7 @@ class EmailFinder:
             source_ip, block_reason = self._pick_source_ip(domain)
             if block_reason is not None:
                 attempts.append({"email": candidate, "status": "throttled", "reason": block_reason})
+                throttled = True
                 break
 
             t0 = time.perf_counter()
@@ -164,7 +171,8 @@ class EmailFinder:
             if self.pacing_seconds > 0:
                 await asyncio.sleep(self.pacing_seconds)
 
-        return FindResult(email=None, status="not_found", catch_all=False,
+        return FindResult(email=None, status="throttled" if throttled else "not_found",
+                          catch_all=False,
                           candidates_tried=len(attempts),
                           attempts=attempts if return_attempts else [],
                           mail_provider=mail_provider)
@@ -245,7 +253,7 @@ class EmailFinder:
             ca_ip, block_reason = self._pick_source_ip(domain)
             if block_reason is not None:
                 yield {"type": "attempt", "status": "throttled", "reason": block_reason}
-                yield _done_event(None, "not_found", False, [], True, mail_provider)
+                yield _done_event(None, "throttled", False, [], True, mail_provider)
                 return
             catch_all = await self.verifier.is_catch_all(domain, source_ip=ca_ip)
             if self.warmup is not None:
@@ -262,6 +270,7 @@ class EmailFinder:
 
         yield {"type": "candidates", "count": len(candidates)}
         attempts: list[dict] = []
+        throttled = False
 
         for candidate in candidates:
             yield {"type": "trying", "email": candidate}
@@ -283,6 +292,7 @@ class EmailFinder:
                 attempt = {"email": candidate, "status": "throttled", "reason": block_reason}
                 attempts.append(attempt)
                 yield {"type": "attempt", **attempt}
+                throttled = True
                 break
 
             t0 = time.perf_counter()
@@ -303,7 +313,8 @@ class EmailFinder:
             if self.pacing_seconds > 0:
                 await asyncio.sleep(self.pacing_seconds)
 
-        yield _done_event(None, "not_found", False, attempts, True, mail_provider)
+        yield _done_event(None, "throttled" if throttled else "not_found",
+                          False, attempts, True, mail_provider)
 
     # ------------------------------------------------- Third-party stream
     async def _find_stream_third_party(

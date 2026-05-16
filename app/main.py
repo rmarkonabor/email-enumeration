@@ -292,6 +292,10 @@ def _to_response(result, return_attempts: bool) -> FindResponse:
         message = ("Domain is catch-all; SMTP cannot confirm. "
                    "Fall back to paid enrichment (LeadMagic, Findymail, etc.).")
         fallback = True
+    elif result.status == "throttled":
+        message = ("SMTP rate limit hit before verification could complete. "
+                   "Retry later or use a third-party provider.")
+        fallback = True
     elif result.status == "not_found":
         message = "No candidate verified. Consider a paid enrichment tool."
         fallback = True
@@ -308,6 +312,18 @@ def _to_response(result, return_attempts: bool) -> FindResponse:
     )
 
 
+def _check_smtp_pool(provider: str) -> None:
+    """Raise 503 if the SMTP pool is fully exhausted. Skipped for third-party providers."""
+    if provider != "smtp":
+        return
+    warmup: Warmup = app.state.warmup
+    if warmup.is_pool_exhausted():
+        raise HTTPException(
+            status_code=503,
+            detail="SMTP pool fully exhausted for today. Retry after UTC midnight or switch to ZeroBounce/Reoon.",
+        )
+
+
 @app.post(
     "/find",
     response_model=FindResponse,
@@ -316,6 +332,7 @@ def _to_response(result, return_attempts: bool) -> FindResponse:
 )
 @limiter.limit(RATE_LIMIT)
 async def find(request: Request, req: FindRequest) -> FindResponse:
+    _check_smtp_pool(req.verify_provider)
     finder: EmailFinder = app.state.finder
     provider_key = req.zerobounce_api_key if req.verify_provider == "zerobounce" else (req.reoon_api_key if req.verify_provider == "reoon" else "")
     try:
@@ -350,6 +367,7 @@ class StreamRequest(BaseModel):
 )
 @limiter.limit(RATE_LIMIT)
 async def find_stream(request: Request, req: StreamRequest) -> StreamingResponse:
+    _check_smtp_pool(req.verify_provider)
     provider_key = req.zerobounce_api_key if req.verify_provider == "zerobounce" else (req.reoon_api_key if req.verify_provider == "reoon" else "")
     finder: EmailFinder = app.state.finder
 
@@ -375,6 +393,7 @@ async def find_stream(request: Request, req: StreamRequest) -> StreamingResponse
 )
 @limiter.limit(RATE_LIMIT)
 async def find_batch_stream(request: Request, req: BatchRequest) -> StreamingResponse:
+    _check_smtp_pool(req.verify_provider)
     finder: EmailFinder = app.state.finder
 
     async def event_gen():
@@ -411,6 +430,7 @@ async def find_batch_stream(request: Request, req: BatchRequest) -> StreamingRes
 )
 @limiter.limit(RATE_LIMIT)
 async def find_batch(request: Request, req: BatchRequest) -> BatchResponse:
+    _check_smtp_pool(req.verify_provider)
     finder: EmailFinder = app.state.finder
 
     async def _one(contact: FindRequest) -> FindResponse:
