@@ -151,6 +151,10 @@ export default function LoginPage() {
             )}
           </p>
         </div>
+
+        <p className="mt-6 text-center text-xs text-slate-500">
+          <a href="/privacy" className="hover:text-white transition-colors">Privacy Policy</a>
+        </p>
       </div>
     </div>
   );

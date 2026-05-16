@@ -159,6 +159,10 @@ export default function SettingsPage() {
           <p className="text-xs text-slate-400 mt-1.5">Invalidates your current key immediately.</p>
         </div>
       </div>
+
+      <p className="text-xs text-slate-400 mt-8 pt-4 border-t border-slate-100">
+        <Link href="/privacy" className="hover:text-slate-600 transition-colors">Privacy Policy</Link>
+      </p>
     </div>
   );
 }
