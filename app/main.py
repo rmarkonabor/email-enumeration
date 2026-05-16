@@ -17,10 +17,12 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
 
 from .auth import is_valid_key
 from .cache import Cache
@@ -44,6 +46,15 @@ VERIFIED_TTL = int(os.getenv("VERIFIED_TTL_SECONDS", str(60 * 60 * 24 * 14)))
 PACING_SECONDS = float(os.getenv("PACING_SECONDS", "0.3"))
 
 MAX_BATCH_SIZE = 50
+RATE_LIMIT = os.getenv("RATE_LIMIT", "500/minute")
+
+
+def _rate_key(request: Request) -> str:
+    """Rate-limit per API key (header) so users behind shared IPs don't share a bucket."""
+    return request.headers.get("x-api-key") or (request.client.host if request.client else "anon")
+
+
+limiter = Limiter(key_func=_rate_key, default_limits=[RATE_LIMIT])
 
 
 @asynccontextmanager
@@ -75,6 +86,17 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+app.state.limiter = limiter
+
+
+@app.exception_handler(RateLimitExceeded)
+async def _ratelimit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={"detail": f"Rate limit exceeded: {exc.detail}. Try again shortly."},
+    )
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -163,7 +185,8 @@ def _to_response(result, return_attempts: bool) -> FindResponse:
     dependencies=[Depends(require_api_key)],
     summary="Find a verified email for one contact",
 )
-async def find(req: FindRequest) -> FindResponse:
+@limiter.limit(RATE_LIMIT)
+async def find(request: Request, req: FindRequest) -> FindResponse:
     finder: EmailFinder = app.state.finder
     provider_key = req.zerobounce_api_key if req.verify_provider == "zerobounce" else (req.reoon_api_key if req.verify_provider == "reoon" else "")
     try:
@@ -196,7 +219,8 @@ class StreamRequest(BaseModel):
     dependencies=[Depends(require_api_key)],
     summary="Stream live progress for a single email lookup (SSE)",
 )
-async def find_stream(req: StreamRequest) -> StreamingResponse:
+@limiter.limit(RATE_LIMIT)
+async def find_stream(request: Request, req: StreamRequest) -> StreamingResponse:
     provider_key = req.zerobounce_api_key if req.verify_provider == "zerobounce" else (req.reoon_api_key if req.verify_provider == "reoon" else "")
     finder: EmailFinder = app.state.finder
 
@@ -220,7 +244,8 @@ async def find_stream(req: StreamRequest) -> StreamingResponse:
     dependencies=[Depends(require_api_key)],
     summary="Stream live progress for a batch lookup (SSE)",
 )
-async def find_batch_stream(req: BatchRequest) -> StreamingResponse:
+@limiter.limit(RATE_LIMIT)
+async def find_batch_stream(request: Request, req: BatchRequest) -> StreamingResponse:
     finder: EmailFinder = app.state.finder
 
     async def event_gen():
@@ -255,7 +280,8 @@ async def find_batch_stream(req: BatchRequest) -> StreamingResponse:
     dependencies=[Depends(require_api_key)],
     summary="Find verified emails for multiple contacts (max 50)",
 )
-async def find_batch(req: BatchRequest) -> BatchResponse:
+@limiter.limit(RATE_LIMIT)
+async def find_batch(request: Request, req: BatchRequest) -> BatchResponse:
     finder: EmailFinder = app.state.finder
 
     async def _one(contact: FindRequest) -> FindResponse:
