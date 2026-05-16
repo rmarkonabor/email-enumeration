@@ -85,13 +85,13 @@ class EmailFinder:
         for candidate in candidates:
             cached = self.cache.get_verified(candidate)
             if cached == "verified":
-                attempts.append({"email": candidate, "status": "verified", "cached": True})
+                attempts.append({"email": candidate, "status": "verified"})
                 return FindResult(email=candidate, status="verified", catch_all=False,
                                   candidates_tried=len(attempts),
                                   attempts=attempts if return_attempts else [],
                                   mail_provider=mail_provider)
             if cached == "not_found":
-                attempts.append({"email": candidate, "status": "not_found", "cached": True})
+                attempts.append({"email": candidate, "status": "not_found"})
                 continue
 
             result = await self.verifier.verify_email(candidate)
@@ -198,13 +198,13 @@ class EmailFinder:
             yield {"type": "trying", "email": candidate}
             cached_status = self.cache.get_verified(candidate)
             if cached_status == "verified":
-                attempt = {"email": candidate, "status": "verified", "cached": True}
+                attempt = {"email": candidate, "status": "verified"}
                 attempts.append(attempt)
                 yield {"type": "attempt", **attempt}
                 yield _done_event(candidate, "verified", False, attempts, False, mail_provider)
                 return
             if cached_status == "not_found":
-                attempt = {"email": candidate, "status": "not_found", "cached": True}
+                attempt = {"email": candidate, "status": "not_found"}
                 attempts.append(attempt)
                 yield {"type": "attempt", **attempt}
                 continue
