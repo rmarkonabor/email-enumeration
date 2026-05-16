@@ -101,6 +101,16 @@ class SMTPVerifier:
             return "SendGrid"
         if "amazonses.com" in combined:
             return "Amazon SES"
+        if "pphosted.com" in combined or "proofpoint.com" in combined:
+            return "Proofpoint"
+        if "mimecast.com" in combined:
+            return "Mimecast"
+        if "barracudanetworks.com" in combined:
+            return "Barracuda"
+        if "iphmx.com" in combined or "cisco.com" in combined:
+            return "Cisco Email Security"
+        if "trendmicro.com" in combined:
+            return "Trend Micro"
         if mx_hosts:
             return None  # Known MX but unrecognised provider
         return None
