@@ -11,7 +11,7 @@ const PROVIDER_LABEL: Record<string, string> = {
 };
 
 function exportRunCSV(run: HistoryRun) {
-  const header = "date,first_name,last_name,domain,email,status,fallback_recommended,verified_via";
+  const header = "date,first_name,last_name,domain,email,status,mail_provider,credits_used,fallback_recommended,verified_via";
   const lines = run.entries.map(e => [
     new Date(e.ts).toISOString(),
     e.request.first_name,
@@ -19,6 +19,8 @@ function exportRunCSV(run: HistoryRun) {
     e.request.domain,
     e.response.email ?? "",
     e.response.status,
+    e.response.mail_provider ?? "",
+    e.response.credits_used ?? 0,
     e.response.fallback_recommended,
     e.provider ?? "smtp",
   ].join(","));
@@ -34,6 +36,7 @@ function exportRunCSV(run: HistoryRun) {
 function RunCard({ run }: { run: HistoryRun }) {
   const [expanded, setExpanded] = useState(true);
   const verified = run.entries.filter(e => e.response.status === "verified").length;
+  const totalCredits = run.entries.reduce((sum, e) => sum + (e.response.credits_used ?? 0), 0);
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
@@ -58,6 +61,11 @@ function RunCard({ run }: { run: HistoryRun }) {
             {run.type === "batch" && (
               <span className="text-xs text-slate-400">{verified} verified</span>
             )}
+            {totalCredits > 0 && (
+              <span className="text-xs px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-100 font-medium">
+                {totalCredits} credit{totalCredits !== 1 ? "s" : ""}
+              </span>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-3">
@@ -79,6 +87,8 @@ function RunCard({ run }: { run: HistoryRun }) {
               <th className="text-left px-5 py-2">Contact</th>
               <th className="text-left px-5 py-2">Email found</th>
               <th className="text-left px-5 py-2">Status</th>
+              <th className="text-left px-5 py-2">Mail provider</th>
+              <th className="text-left px-5 py-2">Credits</th>
               <th className="text-left px-5 py-2">Fallback?</th>
             </tr>
           </thead>
@@ -94,6 +104,12 @@ function RunCard({ run }: { run: HistoryRun }) {
                 </td>
                 <td className="px-5 py-2.5">
                   <StatusBadge status={e.response.status} />
+                </td>
+                <td className="px-5 py-2.5 text-slate-500 text-xs">
+                  {e.response.mail_provider ?? <span className="text-slate-300">—</span>}
+                </td>
+                <td className="px-5 py-2.5 text-slate-500 text-xs">
+                  {e.response.credits_used ? e.response.credits_used : <span className="text-slate-300">—</span>}
                 </td>
                 <td className="px-5 py-2.5 text-slate-500 text-xs">
                   {e.response.fallback_recommended ? "Yes" : "No"}
