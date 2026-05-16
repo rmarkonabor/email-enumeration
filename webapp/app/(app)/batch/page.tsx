@@ -194,9 +194,9 @@ export default function BatchPage() {
 
   function exportCSV() {
     const done = results.filter(r => r.state === "done");
-    const header = "first_name,last_name,domain,email,status,fallback_recommended";
+    const header = "first_name,last_name,domain,email,status,mail_provider,credits_used,fallback_recommended";
     const lines = done.map(({ request: q, response: r }) =>
-      [q.first_name, q.last_name, q.domain, r.email ?? "", r.status, r.fallback_recommended].join(",")
+      [q.first_name, q.last_name, q.domain, r.email ?? "", r.status, r.mail_provider ?? "", r.credits_used ?? 0, r.fallback_recommended].join(",")
     );
     const blob = new Blob([[header, ...lines].join("\n")], { type: "text/csv" });
     const a = document.createElement("a");
@@ -325,6 +325,7 @@ export default function BatchPage() {
                   <th className="text-left pb-2 pr-4">Email found</th>
                   <th className="text-left pb-2 pr-4">Status</th>
                   <th className="text-left pb-2 pr-4">Provider</th>
+                  <th className="text-left pb-2 pr-4">Credits</th>
                   <th className="text-left pb-2">Fallback?</th>
                 </tr>
               </thead>
@@ -350,6 +351,9 @@ export default function BatchPage() {
                     </td>
                     <td className="py-2.5 pr-4 text-slate-500 text-xs">
                       {state === "done" ? (r.mail_provider ?? "—") : "—"}
+                    </td>
+                    <td className="py-2.5 pr-4 text-slate-500 text-xs">
+                      {state === "done" ? (r.credits_used ?? 0) : "—"}
                     </td>
                     <td className="py-2.5 text-slate-500">
                       {state === "done" ? (r.fallback_recommended ? "Yes" : "No") : "—"}
