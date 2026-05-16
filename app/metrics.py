@@ -76,6 +76,14 @@ CREATE TABLE IF NOT EXISTS smtp_domain_daily (
     PRIMARY KEY (day, source_ip, domain)
 );
 CREATE INDEX IF NOT EXISTS idx_sdd_day ON smtp_domain_daily (day);
+
+CREATE TABLE IF NOT EXISTS smtp_ip_metadata (
+    source_ip TEXT PRIMARY KEY,
+    first_seen_at INTEGER NOT NULL,
+    last_activity_at INTEGER,
+    lifetime_attempts INTEGER NOT NULL DEFAULT 0,
+    lifetime_soft_blocks INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -133,6 +141,29 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
     logger.info("Migration complete.")
 
 
+def _backfill_ip_metadata(conn: sqlite3.Connection) -> None:
+    """One-time backfill: derive first_seen_at and lifetime stats per IP
+    from existing smtp_daily_counters rows. Idempotent — only inserts rows
+    that don't already exist in smtp_ip_metadata.
+    """
+    rows = conn.execute(
+        "SELECT source_ip, MIN(day), COALESCE(SUM(attempts), 0), COALESCE(SUM(soft_blocks), 0) "
+        "FROM smtp_daily_counters GROUP BY source_ip"
+    ).fetchall()
+    for source_ip, first_day, attempts, soft_blocks in rows:
+        if not first_day:
+            continue
+        ts = int(dt.datetime.strptime(first_day, "%Y-%m-%d")
+                   .replace(tzinfo=dt.timezone.utc).timestamp())
+        conn.execute(
+            "INSERT OR IGNORE INTO smtp_ip_metadata "
+            "(source_ip, first_seen_at, lifetime_attempts, lifetime_soft_blocks) "
+            "VALUES (?, ?, ?, ?)",
+            (source_ip, ts, attempts, soft_blocks),
+        )
+    conn.commit()
+
+
 class Metrics:
     """Logs verification results and feedback for accuracy tracking."""
 
@@ -151,6 +182,7 @@ class Metrics:
         with self._conn() as conn:
             _migrate_db(conn)
             conn.executescript(SCHEMA)
+            _backfill_ip_metadata(conn)
 
     # --- writes ---
     def log_result(
@@ -242,30 +274,54 @@ class Warmup:
         self.min_sample = min_sample_before_breaker
         self.per_domain_cap = per_domain_cap
         self.source_ips = source_ips or []
-        self.started_at = int(time.time())
+        # Cache of source_ip -> first_seen_at (unix timestamp); refreshed on
+        # init. New IPs are registered with the current time so their warmup
+        # starts at day 0.
+        self._first_seen_cache: dict[str, int] = {}
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             _migrate_db(conn)
             conn.executescript(SCHEMA)
+            _backfill_ip_metadata(conn)
+            self._register_ips(conn)
 
     def _conn(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.execute("PRAGMA journal_mode=WAL;")
         return conn
 
-    def _days_elapsed(self) -> int:
-        return max(0, int((time.time() - self.started_at) // 86400))
+    def _register_ips(self, conn: sqlite3.Connection) -> None:
+        """Insert metadata rows for any configured IPs not yet known. Load
+        first_seen_at into the in-memory cache for fast per-IP age lookups."""
+        now = int(time.time())
+        ips_to_register = list(self.source_ips) if self.source_ips else [""]
+        for ip in ips_to_register:
+            conn.execute(
+                "INSERT OR IGNORE INTO smtp_ip_metadata (source_ip, first_seen_at) VALUES (?, ?)",
+                (ip, now),
+            )
+        conn.commit()
+        rows = conn.execute("SELECT source_ip, first_seen_at FROM smtp_ip_metadata").fetchall()
+        self._first_seen_cache = {ip: ts for ip, ts in rows}
 
-    def current_cap(self) -> int:
-        """Per-IP daily cap based on days since startup."""
-        d = self._days_elapsed()
+    def _days_elapsed(self, source_ip: str = "") -> int:
+        """Days since this IP was first registered (per-IP warmup age)."""
+        ts = self._first_seen_cache.get(source_ip)
+        if ts is None:
+            return 0  # unknown IP — treat as brand new
+        return max(0, int((time.time() - ts) // 86400))
+
+    def current_cap(self, source_ip: str = "") -> int:
+        """Per-IP daily cap based on that IP's individual warmup age."""
+        d = self._days_elapsed(source_ip)
         if d >= self.days_to_max:
             return self.max_cap
         return self.start + int((self.max_cap - self.start) * d / self.days_to_max)
 
     def total_cap(self) -> int:
-        """Total daily cap across all configured IPs."""
-        return self.current_cap() * max(1, len(self.source_ips))
+        """Total daily cap summed across all configured IPs (each at its own age)."""
+        ips = self.source_ips or [""]
+        return sum(self.current_cap(ip) for ip in ips)
 
     def _ensure_today(self, conn: sqlite3.Connection, source_ip: str = "") -> tuple[int, int, int]:
         day = _today()
@@ -301,7 +357,7 @@ class Warmup:
                 domain_attempts, domain_soft = self._domain_today(conn, target_domain, source_ip)
         if paused:
             return False, "smtp_soft_block_circuit_open"
-        if attempts >= self.current_cap():
+        if attempts >= self.current_cap(source_ip):
             return False, "smtp_daily_cap_reached"
         if target_domain and domain_attempts >= self.per_domain_cap:
             return False, f"smtp_per_domain_cap_reached:{target_domain}"
@@ -314,8 +370,21 @@ class Warmup:
     ) -> None:
         is_soft = 1 if (smtp_code in SOFT_BLOCK_CODES) else 0
         day = _today()
+        now = int(time.time())
         with self._conn() as conn:
             self._ensure_today(conn, source_ip)
+            conn.execute(
+                "INSERT OR IGNORE INTO smtp_ip_metadata (source_ip, first_seen_at) VALUES (?, ?)",
+                (source_ip, now),
+            )
+            self._first_seen_cache.setdefault(source_ip, now)
+            conn.execute(
+                "UPDATE smtp_ip_metadata SET last_activity_at = ?, "
+                "lifetime_attempts = lifetime_attempts + 1, "
+                "lifetime_soft_blocks = lifetime_soft_blocks + ? "
+                "WHERE source_ip = ?",
+                (now, is_soft, source_ip),
+            )
             conn.execute(
                 "UPDATE smtp_daily_counters "
                 "SET attempts = attempts + 1, soft_blocks = soft_blocks + ? "
@@ -350,13 +419,12 @@ class Warmup:
             conn.commit()
 
     def is_pool_exhausted(self) -> bool:
-        """True if every configured source IP has hit its daily cap or tripped
-        its circuit breaker for today.
+        """True if every configured source IP has hit its (per-IP) daily cap
+        or tripped its circuit breaker for today.
 
         Used to decide whether to reject new SMTP requests with HTTP 503.
         Cached results don't go through this check.
         """
-        cap = self.current_cap()
         ips_to_check = self.source_ips or [""]
         with self._conn() as conn:
             for ip in ips_to_check:
@@ -367,7 +435,7 @@ class Warmup:
                 if row is None:
                     return False  # IP has no attempts yet => capacity available
                 attempts, paused = row
-                if not paused and attempts < cap:
+                if not paused and attempts < self.current_cap(ip):
                     return False
         return True
 
@@ -381,9 +449,23 @@ class Warmup:
             ).fetchone()
             attempts, soft_blocks, paused = agg
 
+            # Left-join daily counters onto metadata so we surface every
+            # configured IP, including ones with zero traffic today.
             ip_rows = conn.execute(
-                "SELECT source_ip, attempts, soft_blocks, paused "
-                "FROM smtp_daily_counters WHERE day = ? ORDER BY source_ip",
+                """
+                SELECT m.source_ip,
+                       m.first_seen_at,
+                       m.last_activity_at,
+                       m.lifetime_attempts,
+                       m.lifetime_soft_blocks,
+                       COALESCE(d.attempts, 0),
+                       COALESCE(d.soft_blocks, 0),
+                       COALESCE(d.paused, 0)
+                FROM smtp_ip_metadata m
+                LEFT JOIN smtp_daily_counters d
+                  ON d.source_ip = m.source_ip AND d.day = ?
+                ORDER BY m.source_ip
+                """,
                 (day,),
             ).fetchall()
 
@@ -393,32 +475,41 @@ class Warmup:
                 (day,),
             ).fetchall()
 
-        cap_per_ip = self.current_cap()
         total = self.total_cap()
+        per_ip = []
+        for ip, first_seen, last_act, life_att, life_soft, a, s, p in ip_rows:
+            cap = self.current_cap(ip)
+            age_days = self._days_elapsed(ip)
+            per_ip.append({
+                "source_ip": ip or "default",
+                "first_seen": dt.datetime.fromtimestamp(first_seen, dt.timezone.utc).isoformat(),
+                "last_activity": (dt.datetime.fromtimestamp(last_act, dt.timezone.utc).isoformat()
+                                  if last_act else None),
+                "age_days": age_days,
+                "day_in_warmup": min(age_days, self.days_to_max),
+                "warmup_complete": age_days >= self.days_to_max,
+                "cap": cap,
+                "attempts": a,
+                "soft_blocks": s,
+                "soft_block_pct": round(100.0 * s / a, 1) if a else 0.0,
+                "remaining": max(0, cap - a),
+                "paused": bool(p),
+                "lifetime_attempts": life_att,
+                "lifetime_soft_blocks": life_soft,
+            })
+
         return {
             "day": day,
             "attempts": attempts,
             "soft_blocks": soft_blocks,
             "soft_block_pct": round(100.0 * soft_blocks / attempts, 1) if attempts else 0.0,
-            "cap_per_ip": cap_per_ip,
             "cap": total,
             "remaining": max(0, total - attempts),
             "paused": bool(paused),
             "per_domain_cap": self.per_domain_cap,
-            "day_in_warmup": min(self._days_elapsed(), self.days_to_max),
             "days_to_max": self.days_to_max,
-            "source_ip_count": max(1, len(self.source_ips)),
-            "per_ip": [
-                {
-                    "source_ip": ip or "default",
-                    "attempts": a,
-                    "soft_blocks": s,
-                    "paused": bool(p),
-                    "cap": cap_per_ip,
-                    "remaining": max(0, cap_per_ip - a),
-                }
-                for ip, a, s, p in ip_rows
-            ],
+            "source_ip_count": len(per_ip),
+            "per_ip": per_ip,
             "top_domains_today": [
                 {"domain": d, "attempts": a, "soft_blocks": s} for d, a, s in top_domains
             ],
