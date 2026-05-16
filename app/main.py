@@ -55,7 +55,29 @@ WARMUP_MAX = int(os.getenv("WARMUP_MAX_VOLUME", "1500"))
 WARMUP_DAYS_TO_MAX = int(os.getenv("WARMUP_DAYS_TO_MAX", "60"))
 WARMUP_SOFT_BLOCK_THRESHOLD = float(os.getenv("WARMUP_SOFT_BLOCK_THRESHOLD", "0.05"))
 WARMUP_PER_DOMAIN_CAP = int(os.getenv("WARMUP_PER_DOMAIN_CAP", "40"))
-SMTP_SOURCE_IPS = [ip.strip() for ip in os.getenv("SMTP_SOURCE_IPS", "").split(",") if ip.strip()]
+def _parse_source_ips(raw: str) -> tuple[list[str], dict[str, str]]:
+    """Parse SMTP_SOURCE_IPS env var.
+
+    Accepts comma-separated entries of either plain IPs or ip:helo pairs:
+      5.78.84.39:verify1.mailcheckhq.com,5.78.29.123:verify2.mailcheckhq.com
+    Returns (list_of_ips, ip_to_helo_map).
+    """
+    ips: list[str] = []
+    helo_map: dict[str, str] = {}
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if ":" in entry:
+            ip, helo = entry.split(":", 1)
+            ip, helo = ip.strip(), helo.strip()
+            ips.append(ip)
+            helo_map[ip] = helo
+        else:
+            ips.append(entry)
+    return ips, helo_map
+
+SMTP_SOURCE_IPS, SMTP_IP_HELO_MAP = _parse_source_ips(os.getenv("SMTP_SOURCE_IPS", ""))
 
 
 def _rate_key(request: Request) -> str:
@@ -87,6 +109,7 @@ async def lifespan(app: FastAPI):
         sender_email=SENDER_EMAIL,
         helo_hostname=HELO_HOSTNAME,
         smtp_timeout=SMTP_TIMEOUT,
+        ip_helo_map=SMTP_IP_HELO_MAP,
     )
     cache = Cache(
         DB_PATH,

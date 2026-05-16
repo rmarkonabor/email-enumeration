@@ -47,11 +47,20 @@ class SMTPVerifier:
         sender_email: str = "verify@example.com",
         helo_hostname: str = "verifier.example.com",
         smtp_timeout: float = 10.0,
+        ip_helo_map: dict[str, str] | None = None,
     ) -> None:
         self.sender_email = sender_email
         self.helo_hostname = helo_hostname
         self.smtp_timeout = smtp_timeout
+        # Maps source_ip -> helo_hostname for per-IP HELO alignment
+        self.ip_helo_map: dict[str, str] = ip_helo_map or {}
         self._mx_cache: dict[str, list[str]] = {}
+
+    def _helo_for(self, source_ip: str | None) -> str:
+        """Return the HELO hostname for the given source IP."""
+        if source_ip and source_ip in self.ip_helo_map:
+            return self.ip_helo_map[source_ip]
+        return self.helo_hostname
 
     async def get_mx_records(self, domain: str) -> list[str]:
         """Return MX hosts sorted by preference (lowest number = try first)."""
@@ -123,7 +132,7 @@ class SMTPVerifier:
             hostname=mx_host,
             port=25,
             timeout=self.smtp_timeout,
-            local_hostname=self.helo_hostname,
+            local_hostname=self._helo_for(source_ip),
             source_address=(source_ip, 0) if source_ip else None,
         )
         try:
