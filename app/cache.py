@@ -96,5 +96,21 @@ class Cache:
             )
             conn.commit()
 
+    # ----- maintenance -----
+    def purge_expired(self) -> tuple[int, int]:
+        """Delete rows past their TTL. Returns (domains_deleted, emails_deleted)."""
+        now = int(time.time())
+        with self._conn() as conn:
+            d = conn.execute(
+                "DELETE FROM domain_status WHERE checked_at < ?",
+                (now - self.catch_all_ttl,),
+            ).rowcount
+            e = conn.execute(
+                "DELETE FROM verified_emails WHERE verified_at < ?",
+                (now - self.verified_ttl,),
+            ).rowcount
+            conn.commit()
+        return d, e
+
 
 __all__ = ["Cache"]

@@ -57,6 +57,20 @@ def _rate_key(request: Request) -> str:
 limiter = Limiter(key_func=_rate_key, default_limits=[RATE_LIMIT])
 
 
+async def _purge_loop(cache: Cache, interval_seconds: int) -> None:
+    """Background task: periodically delete cache rows past their TTL."""
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            domains, emails = await asyncio.to_thread(cache.purge_expired)
+            if domains or emails:
+                logger.info("Cache purge: removed %d expired domains, %d expired emails", domains, emails)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("Cache purge failed: %s", e)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
@@ -73,10 +87,25 @@ async def lifespan(app: FastAPI):
     app.state.finder = EmailFinder(
         verifier=verifier, cache=cache, pacing_seconds=PACING_SECONDS
     )
+
+    # Run once on startup so a restart actually clears anything overdue,
+    # then every 24h.
+    initial_d, initial_e = await asyncio.to_thread(cache.purge_expired)
+    if initial_d or initial_e:
+        logger.info("Startup cache purge: removed %d expired domains, %d expired emails", initial_d, initial_e)
+    purge_task = asyncio.create_task(_purge_loop(cache, 60 * 60 * 24))
+
     logger.info("Email finder started. db=%s helo=%s", DB_PATH, HELO_HOSTNAME)
     if not API_KEY:
         logger.warning("API_KEY env var is empty. All requests will be rejected.")
-    yield
+    try:
+        yield
+    finally:
+        purge_task.cancel()
+        try:
+            await purge_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(
