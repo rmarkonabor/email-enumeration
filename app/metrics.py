@@ -42,10 +42,12 @@ CREATE TABLE IF NOT EXISTS verification_log (
     status TEXT NOT NULL,
     smtp_code INTEGER,
     response_ms INTEGER,
-    soft_block INTEGER NOT NULL DEFAULT 0
+    soft_block INTEGER NOT NULL DEFAULT 0,
+    user_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_vl_ts ON verification_log (ts);
 CREATE INDEX IF NOT EXISTS idx_vl_email ON verification_log (email);
+CREATE INDEX IF NOT EXISTS idx_vl_user ON verification_log (user_id);
 
 CREATE TABLE IF NOT EXISTS verification_feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -141,6 +143,21 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
     logger.info("Migration complete.")
 
 
+def _migrate_verification_log(conn: sqlite3.Connection) -> None:
+    """Add user_id column to verification_log on existing deployments."""
+    tbl = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='verification_log'"
+    ).fetchone()
+    if not tbl:
+        return  # Fresh install — SCHEMA creates it with user_id already
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(verification_log)").fetchall()}
+    if "user_id" in cols:
+        return
+    conn.execute("ALTER TABLE verification_log ADD COLUMN user_id TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vl_user ON verification_log (user_id)")
+    conn.commit()
+
+
 def _backfill_ip_metadata(conn: sqlite3.Connection) -> None:
     """One-time backfill: derive first_seen_at and lifetime stats per IP
     from existing smtp_daily_counters rows. Idempotent — only inserts rows
@@ -181,6 +198,7 @@ class Metrics:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             _migrate_db(conn)
+            _migrate_verification_log(conn)
             conn.executescript(SCHEMA)
             _backfill_ip_metadata(conn)
 
@@ -192,13 +210,15 @@ class Metrics:
         status: str,
         smtp_code: int | None = None,
         response_ms: int | None = None,
+        user_id: str | None = None,
     ) -> None:
         soft = 1 if (smtp_code in SOFT_BLOCK_CODES) else 0
         with self._conn() as conn:
             conn.execute(
-                "INSERT INTO verification_log (ts, method, email, status, smtp_code, response_ms, soft_block) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (int(time.time()), method, email, status, smtp_code, response_ms, soft),
+                "INSERT INTO verification_log "
+                "(ts, method, email, status, smtp_code, response_ms, soft_block, user_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (int(time.time()), method, email, status, smtp_code, response_ms, soft, user_id),
             )
             conn.commit()
 
@@ -231,6 +251,67 @@ class Metrics:
                 (cutoff,),
             ).fetchone()
         return {"smtp": row[0] or 0, "zerobounce": row[1] or 0, "reoon": row[2] or 0, "total": row[3] or 0}
+
+    def user_activity_summary(self) -> list[dict]:
+        """Aggregate verification counts per user_id across 24h / 7d / 30d windows."""
+        now = int(time.time())
+        cutoffs = {
+            "24h": now - 86400,
+            "7d": now - 7 * 86400,
+            "30d": now - 30 * 86400,
+        }
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT user_id, COUNT(*), MAX(ts) "
+                "FROM verification_log "
+                "WHERE user_id IS NOT NULL "
+                "GROUP BY user_id",
+            ).fetchall()
+            out = []
+            for user_id, total, last_ts in rows:
+                counts = {}
+                for label, cutoff in cutoffs.items():
+                    n = conn.execute(
+                        "SELECT COUNT(*) FROM verification_log WHERE user_id = ? AND ts > ?",
+                        (user_id, cutoff),
+                    ).fetchone()[0]
+                    counts[label] = n
+                out.append({
+                    "user_id": user_id,
+                    "lifetime_lookups": total,
+                    "last_activity": dt.datetime.fromtimestamp(last_ts, dt.timezone.utc).isoformat()
+                                     if last_ts else None,
+                    **{f"lookups_{k}": v for k, v in counts.items()},
+                })
+        return out
+
+    def user_recent_log(self, user_id: str, limit: int = 50) -> list[dict]:
+        """Last N verification log entries for a specific user (newest first)."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT ts, method, email, status, smtp_code, response_ms "
+                "FROM verification_log WHERE user_id = ? "
+                "ORDER BY ts DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
+        return [
+            {
+                "ts": dt.datetime.fromtimestamp(ts, dt.timezone.utc).isoformat(),
+                "method": method,
+                "email": email,
+                "status": status,
+                "smtp_code": smtp_code,
+                "response_ms": response_ms,
+            }
+            for ts, method, email, status, smtp_code, response_ms in rows
+        ]
+
+    def delete_user_data(self, user_id: str) -> int:
+        """Delete all verification_log rows for a user. Returns rows deleted."""
+        with self._conn() as conn:
+            cur = conn.execute("DELETE FROM verification_log WHERE user_id = ?", (user_id,))
+            conn.commit()
+            return cur.rowcount
 
     def accuracy(self, days: int = 30) -> dict:
         cutoff = int(time.time()) - days * 86400
@@ -281,6 +362,7 @@ class Warmup:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             _migrate_db(conn)
+            _migrate_verification_log(conn)
             conn.executescript(SCHEMA)
             _backfill_ip_metadata(conn)
             self._register_ips(conn)

@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 
-from .auth import is_valid_key
+from .auth import UserContext, invalidate_cache, validate_key
 from .cache import Cache
 from .metrics import Metrics, Warmup
 from .smtp_verifier import SMTPVerifier
@@ -194,13 +194,21 @@ app.add_middleware(
 )
 
 
-# ----- Auth dependency -----
-async def require_api_key(x_api_key: str = Header(default="")) -> None:
-    if not await is_valid_key(x_api_key):
+# ----- Auth dependencies -----
+async def require_api_key(x_api_key: str = Header(default="")) -> UserContext:
+    ctx = await validate_key(x_api_key)
+    if ctx is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing X-API-Key header",
+            detail="Invalid, missing, or disabled X-API-Key",
         )
+    return ctx
+
+
+async def require_admin(ctx: UserContext = Depends(require_api_key)) -> UserContext:
+    if not ctx.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    return ctx
 
 
 # ----- Models -----
@@ -269,10 +277,10 @@ async def stats() -> dict:
 
 @app.post(
     "/verify/feedback",
-    dependencies=[Depends(require_api_key)],
     summary="Report an incorrect verification result",
 )
-async def submit_feedback(req: FeedbackRequest) -> dict:
+async def submit_feedback(req: FeedbackRequest,
+                           ctx: UserContext = Depends(require_api_key)) -> dict:
     if req.actual_status not in {"verified", "not_found", "catch_all"}:
         raise HTTPException(status_code=400, detail="actual_status must be one of: verified, not_found, catch_all")
     metrics: Metrics = app.state.metrics
@@ -327,11 +335,11 @@ def _check_smtp_pool(provider: str) -> None:
 @app.post(
     "/find",
     response_model=FindResponse,
-    dependencies=[Depends(require_api_key)],
     summary="Find a verified email for one contact",
 )
 @limiter.limit(RATE_LIMIT)
-async def find(request: Request, req: FindRequest) -> FindResponse:
+async def find(request: Request, req: FindRequest,
+               ctx: UserContext = Depends(require_api_key)) -> FindResponse:
     _check_smtp_pool(req.verify_provider)
     finder: EmailFinder = app.state.finder
     provider_key = req.zerobounce_api_key if req.verify_provider == "zerobounce" else (req.reoon_api_key if req.verify_provider == "reoon" else "")
@@ -344,6 +352,7 @@ async def find(request: Request, req: FindRequest) -> FindResponse:
             return_attempts=req.return_attempts,
             provider=req.verify_provider,
             provider_key=provider_key,
+            user_id=ctx.user_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -362,11 +371,11 @@ class StreamRequest(BaseModel):
 
 @app.post(
     "/find/stream",
-    dependencies=[Depends(require_api_key)],
     summary="Stream live progress for a single email lookup (SSE)",
 )
 @limiter.limit(RATE_LIMIT)
-async def find_stream(request: Request, req: StreamRequest) -> StreamingResponse:
+async def find_stream(request: Request, req: StreamRequest,
+                       ctx: UserContext = Depends(require_api_key)) -> StreamingResponse:
     _check_smtp_pool(req.verify_provider)
     provider_key = req.zerobounce_api_key if req.verify_provider == "zerobounce" else (req.reoon_api_key if req.verify_provider == "reoon" else "")
     finder: EmailFinder = app.state.finder
@@ -376,6 +385,7 @@ async def find_stream(request: Request, req: StreamRequest) -> StreamingResponse
             async for event in finder.find_stream(
                 req.first_name, req.last_name, req.domain, req.middle_name,
                 provider=req.verify_provider, provider_key=provider_key,
+                user_id=ctx.user_id,
             ):
                 yield f"data: {json.dumps(event)}\n\n"
         except Exception as e:
@@ -388,11 +398,11 @@ async def find_stream(request: Request, req: StreamRequest) -> StreamingResponse
 
 @app.post(
     "/find/batch/stream",
-    dependencies=[Depends(require_api_key)],
     summary="Stream live progress for a batch lookup (SSE)",
 )
 @limiter.limit(RATE_LIMIT)
-async def find_batch_stream(request: Request, req: BatchRequest) -> StreamingResponse:
+async def find_batch_stream(request: Request, req: BatchRequest,
+                             ctx: UserContext = Depends(require_api_key)) -> StreamingResponse:
     _check_smtp_pool(req.verify_provider)
     finder: EmailFinder = app.state.finder
 
@@ -410,6 +420,7 @@ async def find_batch_stream(request: Request, req: BatchRequest) -> StreamingRes
                     middle_name=contact.middle_name,
                     provider=req.verify_provider,
                     provider_key=batch_provider_key,
+                    user_id=ctx.user_id,
                 )
                 resp = _to_response(result, False)
                 yield f"data: {json.dumps({'type': 'contact_done', 'index': i, **resp.model_dump()})}\n\n"
@@ -425,11 +436,11 @@ async def find_batch_stream(request: Request, req: BatchRequest) -> StreamingRes
 @app.post(
     "/find/batch",
     response_model=BatchResponse,
-    dependencies=[Depends(require_api_key)],
     summary="Find verified emails for multiple contacts (max 50)",
 )
 @limiter.limit(RATE_LIMIT)
-async def find_batch(request: Request, req: BatchRequest) -> BatchResponse:
+async def find_batch(request: Request, req: BatchRequest,
+                      ctx: UserContext = Depends(require_api_key)) -> BatchResponse:
     _check_smtp_pool(req.verify_provider)
     finder: EmailFinder = app.state.finder
 
@@ -441,6 +452,7 @@ async def find_batch(request: Request, req: BatchRequest) -> BatchResponse:
                 domain=contact.domain,
                 middle_name=contact.middle_name,
                 return_attempts=contact.return_attempts,
+                user_id=ctx.user_id,
             )
             return _to_response(result, contact.return_attempts)
         except ValueError as e:
@@ -462,3 +474,174 @@ async def find_batch(request: Request, req: BatchRequest) -> BatchResponse:
 
     results = await asyncio.gather(*(_bounded(c) for c in req.contacts))
     return BatchResponse(results=results)
+
+
+# ============================================================================
+# Admin endpoints — gated by require_admin (X-API-Key with profiles.is_admin=true
+# or matching ADMIN_API_KEY env var)
+# ============================================================================
+
+import httpx as _httpx
+from .auth import SUPABASE_SERVICE_KEY, SUPABASE_URL
+
+
+async def _supabase_request(method: str, path: str, **kwargs) -> _httpx.Response:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        raise HTTPException(503, "Supabase not configured")
+    headers = kwargs.pop("headers", {})
+    headers.update({
+        "apikey": SUPABASE_SERVICE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "Content-Type": "application/json",
+    })
+    async with _httpx.AsyncClient(timeout=10) as client:
+        return await client.request(method, f"{SUPABASE_URL}/rest/v1{path}", headers=headers, **kwargs)
+
+
+@app.get(
+    "/admin/users",
+    summary="List users with activity counts (admin only)",
+)
+async def admin_list_users(ctx: UserContext = Depends(require_admin)) -> dict:
+    r = await _supabase_request(
+        "GET",
+        "/profiles",
+        params={"select": "id,api_key,is_admin,disabled,created_at", "order": "created_at.desc"},
+    )
+    if r.status_code != 200:
+        raise HTTPException(502, f"Supabase error: {r.status_code}")
+    profiles = r.json()
+
+    metrics: Metrics = app.state.metrics
+    activity = {row["user_id"]: row for row in metrics.user_activity_summary()}
+
+    users = []
+    for p in profiles:
+        a = activity.get(p["id"], {})
+        api_key = p.get("api_key") or ""
+        users.append({
+            "id": p["id"],
+            "api_key_preview": (api_key[:6] + "..." + api_key[-4:]) if len(api_key) > 10 else api_key,
+            "is_admin": bool(p.get("is_admin")),
+            "disabled": bool(p.get("disabled")),
+            "created_at": p.get("created_at"),
+            "lifetime_lookups": a.get("lifetime_lookups", 0),
+            "lookups_24h": a.get("lookups_24h", 0),
+            "lookups_7d": a.get("lookups_7d", 0),
+            "lookups_30d": a.get("lookups_30d", 0),
+            "last_activity": a.get("last_activity"),
+        })
+    return {"users": users}
+
+
+@app.get(
+    "/admin/users/{user_id}",
+    summary="User detail with recent activity (admin only)",
+)
+async def admin_user_detail(user_id: str, ctx: UserContext = Depends(require_admin)) -> dict:
+    r = await _supabase_request(
+        "GET",
+        "/profiles",
+        params={"id": f"eq.{user_id}", "select": "*"},
+    )
+    if r.status_code != 200:
+        raise HTTPException(502, f"Supabase error: {r.status_code}")
+    rows = r.json()
+    if not rows:
+        raise HTTPException(404, "User not found")
+    profile = rows[0]
+    metrics: Metrics = app.state.metrics
+    activity = next((a for a in metrics.user_activity_summary() if a["user_id"] == user_id), {})
+    return {
+        "profile": {
+            "id": profile["id"],
+            "api_key": profile.get("api_key"),
+            "is_admin": bool(profile.get("is_admin")),
+            "disabled": bool(profile.get("disabled")),
+            "created_at": profile.get("created_at"),
+            "verify_provider": profile.get("verify_provider"),
+        },
+        "activity": activity,
+        "recent": metrics.user_recent_log(user_id, limit=50),
+    }
+
+
+class DisableRequest(BaseModel):
+    disabled: bool
+
+
+@app.post(
+    "/admin/users/{user_id}/disable",
+    summary="Disable or re-enable a user's API key (admin only)",
+)
+async def admin_set_disabled(user_id: str, req: DisableRequest,
+                              ctx: UserContext = Depends(require_admin)) -> dict:
+    r = await _supabase_request(
+        "PATCH",
+        "/profiles",
+        params={"id": f"eq.{user_id}"},
+        json={"disabled": req.disabled},
+    )
+    if r.status_code not in (200, 204):
+        raise HTTPException(502, f"Supabase error: {r.status_code}")
+    invalidate_cache()  # the user's cached UserContext may now be stale
+    return {"id": user_id, "disabled": req.disabled}
+
+
+@app.post(
+    "/admin/users/{user_id}/regenerate-key",
+    summary="Regenerate a user's API key (admin only)",
+)
+async def admin_regenerate_key(user_id: str, ctx: UserContext = Depends(require_admin)) -> dict:
+    import secrets as _secrets
+    new_key = "ef_" + _secrets.token_hex(16)
+    r = await _supabase_request(
+        "PATCH",
+        "/profiles",
+        params={"id": f"eq.{user_id}"},
+        json={"api_key": new_key},
+    )
+    if r.status_code not in (200, 204):
+        raise HTTPException(502, f"Supabase error: {r.status_code}")
+    invalidate_cache()  # purge any cached entry for the old key
+    return {"id": user_id, "api_key": new_key}
+
+
+@app.delete(
+    "/admin/users/{user_id}",
+    summary="Delete a user, their profile, and all their verification logs (admin only)",
+)
+async def admin_delete_user(user_id: str, ctx: UserContext = Depends(require_admin)) -> dict:
+    if ctx.user_id == user_id:
+        raise HTTPException(400, "Cannot delete your own account via admin endpoint")
+    metrics: Metrics = app.state.metrics
+    deleted_logs = metrics.delete_user_data(user_id)
+    # Delete from auth.users (cascades to public.profiles via FK)
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        raise HTTPException(503, "Supabase not configured")
+    async with _httpx.AsyncClient(timeout=10) as client:
+        r = await client.delete(
+            f"{SUPABASE_URL}/auth/v1/admin/users/{user_id}",
+            headers={
+                "apikey": SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+            },
+        )
+    if r.status_code not in (200, 204):
+        raise HTTPException(502, f"Supabase auth delete failed: {r.status_code}")
+    invalidate_cache()
+    return {"id": user_id, "deleted_log_rows": deleted_logs}
+
+
+@app.get(
+    "/admin/system",
+    summary="System-wide metrics — IPs, warmup, volume (admin only)",
+)
+async def admin_system(ctx: UserContext = Depends(require_admin)) -> dict:
+    warmup: Warmup = app.state.warmup
+    metrics: Metrics = app.state.metrics
+    return {
+        "warmup": warmup.today_stats(),
+        "volume_24h": metrics.today_volume(),
+        "pool_exhausted": warmup.is_pool_exhausted(),
+    }

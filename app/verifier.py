@@ -103,12 +103,14 @@ class EmailFinder:
         return_attempts: bool = False,
         provider: str = "smtp",
         provider_key: str = "",
+        user_id: str | None = None,
     ) -> FindResult:
         domain = domain.strip().lower().lstrip("@")
 
         if provider != "smtp":
             return await self._find_third_party(
-                first_name, last_name, domain, middle_name, return_attempts, provider, provider_key
+                first_name, last_name, domain, middle_name, return_attempts,
+                provider, provider_key, user_id=user_id,
             )
 
         mail_provider = await self.verifier.detect_mail_provider(domain)
@@ -160,7 +162,8 @@ class EmailFinder:
             if self.warmup is not None:
                 self.warmup.record_attempt(result.response_code, domain, source_ip=source_ip or "")
             if self.metrics is not None:
-                self.metrics.log_result("smtp", candidate, result.status, result.response_code, response_ms)
+                self.metrics.log_result("smtp", candidate, result.status, result.response_code,
+                                         response_ms, user_id=user_id)
             attempts.append({"email": candidate, "status": result.status, "code": result.response_code})
 
             if result.status == "verified":
@@ -187,6 +190,7 @@ class EmailFinder:
         return_attempts: bool,
         provider: str,
         provider_key: str,
+        user_id: str | None = None,
     ) -> FindResult:
         mail_provider = await self.verifier.detect_mail_provider(domain)
         candidates = generate_permutations(first_name, last_name, domain, middle_name)
@@ -200,7 +204,7 @@ class EmailFinder:
             if billed:
                 credits_used += 1
             if self.metrics is not None:
-                self.metrics.log_result(provider, candidate, status, None, response_ms)
+                self.metrics.log_result(provider, candidate, status, None, response_ms, user_id=user_id)
             attempts.append({"email": candidate, "status": status, "provider": provider})
 
             if status == "verified":
@@ -232,12 +236,13 @@ class EmailFinder:
         middle_name: str | None = None,
         provider: str = "smtp",
         provider_key: str = "",
+        user_id: str | None = None,
     ) -> AsyncGenerator[dict, None]:
         domain = domain.strip().lower().lstrip("@")
 
         if provider != "smtp":
             async for event in self._find_stream_third_party(
-                first_name, last_name, domain, middle_name, provider, provider_key
+                first_name, last_name, domain, middle_name, provider, provider_key, user_id=user_id,
             ):
                 yield event
             return
@@ -302,7 +307,8 @@ class EmailFinder:
             if self.warmup is not None:
                 self.warmup.record_attempt(result.response_code, domain, source_ip=source_ip or "")
             if self.metrics is not None:
-                self.metrics.log_result("smtp", candidate, result.status, result.response_code, response_ms)
+                self.metrics.log_result("smtp", candidate, result.status, result.response_code,
+                                         response_ms, user_id=user_id)
             attempt = {"email": candidate, "status": result.status, "code": result.response_code}
             attempts.append(attempt)
             yield {"type": "attempt", **attempt}
@@ -325,6 +331,7 @@ class EmailFinder:
         middle_name: str | None,
         provider: str,
         provider_key: str,
+        user_id: str | None = None,
     ) -> AsyncGenerator[dict, None]:
         mail_provider = await self.verifier.detect_mail_provider(domain)
         if mail_provider:
@@ -346,7 +353,7 @@ class EmailFinder:
             if billed:
                 credits_used += 1
             if self.metrics is not None:
-                self.metrics.log_result(provider, candidate, status, None, response_ms)
+                self.metrics.log_result(provider, candidate, status, None, response_ms, user_id=user_id)
             attempt = {"email": candidate, "status": status, "provider": provider}
             attempts.append(attempt)
             yield {"type": "attempt", **attempt}
