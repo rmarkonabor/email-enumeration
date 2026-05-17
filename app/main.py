@@ -555,6 +555,9 @@ def _estimate_eta_seconds(store: JobStore, warmup: Warmup, contacts_ahead: int) 
 @limiter.limit(RATE_LIMIT)
 async def find_batch(request: Request, req: BatchRequest,
                       ctx: UserContext = Depends(require_api_key)):
+    # Block all new SMTP submissions when the pool is exhausted — no point
+    # queuing work that can't run until UTC midnight. No-op for ZB/Reoon.
+    _check_smtp_pool(req.verify_provider)
     quota_snapshot = _enforce_quota(ctx, len(req.contacts))
 
     # --- Large batches: enqueue and return immediately ---
@@ -585,7 +588,6 @@ async def find_batch(request: Request, req: BatchRequest,
         )
 
     # --- Small batches: existing synchronous path ---
-    _check_smtp_pool(req.verify_provider)
     finder: EmailFinder = app.state.finder
 
     _batch_provider_key = (

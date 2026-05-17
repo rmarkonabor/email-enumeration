@@ -33,6 +33,8 @@ logger = logging.getLogger(__name__)
 SYNC_THRESHOLD = 25  # contacts: at or below = stream synchronously; above = queue
 PER_CONTACT_TIMEOUT = 120.0  # seconds; caps any single contact so one bad MX can't freeze the worker
 SLOW_CONTACT_THRESHOLD_MS = 30_000  # log at WARNING when a contact exceeds this
+EARLY_FAIL_WINDOW = 10  # check the first N contacts of each job for systemic failure
+EARLY_FAIL_THRESHOLD = 10  # if all N are 'error' with the same message, fail the job
 ACTIVE_STATUSES = ("queued", "running")
 TERMINAL_STATUSES = ("done", "failed", "cancelled")
 
@@ -602,6 +604,28 @@ class JobWorker:
                             job["id"], job["done_count"], e)
             self.store.mark_failed(job["id"], f"DB write failed: {e}")
             return
+
+        # Early-fail circuit: if the first EARLY_FAIL_WINDOW contacts all
+        # returned 'error' with the same error string, the underlying issue
+        # (provider down, bad API key, network outage) won't fix itself for
+        # the remaining contacts. Fail fast so the user knows to retry.
+        new_done = job["done_count"] + 1
+        if new_done == EARLY_FAIL_WINDOW and new_done < job["total"]:
+            updated = self.store.get(job["id"])
+            if updated and updated["status"] == "running":
+                window = updated["results"][:EARLY_FAIL_WINDOW]
+                errors = [r.get("error", "") for r in window if r.get("status") == "error"]
+                if len(errors) >= EARLY_FAIL_THRESHOLD and len(set(errors)) == 1:
+                    err_msg = errors[0] or "unknown error"
+                    logger.warning(
+                        "Early-fail circuit tripped for job=%s: first %d contacts all errored with '%s'",
+                        job["id"], EARLY_FAIL_WINDOW, err_msg,
+                    )
+                    self.store.mark_failed(
+                        job["id"],
+                        f"aborted after {EARLY_FAIL_WINDOW} consecutive errors: {err_msg}",
+                    )
+                    return
 
         # Re-check job state after this contact
         updated = self.store.get(job["id"])
