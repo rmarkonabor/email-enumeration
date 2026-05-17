@@ -3,23 +3,30 @@
 Two responsibilities, one SQLite database (shared with the cache):
 
 1. **Warmup**: cap daily SMTP attempts to ramp our outgoing IP reputation
-   gradually. Linear growth from WARMUP_START to WARMUP_MAX over
-   WARMUP_DAYS_TO_MAX days. If the soft-block rate (421/450/451/452) exceeds
-   WARMUP_SOFT_BLOCK_THRESHOLD after a minimum sample size, SMTP is paused
-   for the rest of the UTC day.
+   gradually using a stepped schedule (see ``DEFAULT_STEPPED_SCHEDULE``).
+   Each source IP is tracked independently — caps, circuit breaker, and
+   per-provider counters are all keyed by ``source_ip``.
 
-   Multiple source IPs are tracked independently — each IP gets its own
-   daily cap and circuit breaker. Total daily capacity = cap_per_ip × num_ips.
+   The stepped schedule is a conservative starting hypothesis tuned for
+   B2B-only verification traffic. A later phase layers an AIMD-style
+   adaptive controller on top, but the schedule remains the cold-start
+   default and the safety floor.
 
 2. **Metrics**: log every verification attempt (SMTP or third-party) and
    accept user feedback ("you said verified but the email bounces") so we
-   can measure real-world accuracy.
+   can measure real-world accuracy. SMTP attempts are additionally tallied
+   per (source_ip, provider) in ``smtp_provider_daily`` so we can observe
+   per-provider health (throttle rate, latency) before adapting caps.
 
-Soft-block SMTP codes we count toward throttling:
+Soft-block SMTP codes (throttling — count toward circuit breaker):
    421  Service not available, closing transmission channel
    450  Mailbox unavailable; try again later
    451  Local error in processing
    452  Insufficient system storage
+
+Hard-block SMTP codes (policy / blocklist — reputation incident):
+   521  Server does not accept mail
+   554  Transaction failed / policy reject
 """
 from __future__ import annotations
 
@@ -32,6 +39,23 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 SOFT_BLOCK_CODES = {421, 450, 451, 452}
+HARD_BLOCK_CODES = {521, 554}
+
+# B2B-tuned stepped warmup schedule: (days_upper_bound_exclusive, daily_cap_per_ip).
+# Driven by Microsoft as the binding constraint (Phase 1 of adaptive controller
+# treats this as both starting point and floor; it does NOT replace the need
+# for SNDS/Postmaster reputation monitoring).
+DEFAULT_STEPPED_SCHEDULE: tuple[tuple[int, int], ...] = (
+    (2,      60),    # days 0-1   : cold start, observe only
+    (5,      200),   # days 2-4   : establish baseline
+    (10,     500),   # days 5-9   : first real load
+    (15,     1100),  # days 10-14 : cross harvest-suspicion threshold deliberately
+    (22,     2000),  # days 15-21 :
+    (30,     3000),  # days 22-29 :
+    (45,     4200),  # days 30-44 :
+    (60,     5500),  # days 45-59 : conservative steady state
+    (10**9,  5800),  # 60+        : hold; manual raise only with SNDS-green data
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS verification_log (
@@ -86,6 +110,20 @@ CREATE TABLE IF NOT EXISTS smtp_ip_metadata (
     lifetime_attempts INTEGER NOT NULL DEFAULT 0,
     lifetime_soft_blocks INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS smtp_provider_daily (
+    day TEXT NOT NULL,
+    source_ip TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    soft_blocks INTEGER NOT NULL DEFAULT 0,
+    hard_blocks INTEGER NOT NULL DEFAULT 0,
+    latency_ms_sum INTEGER NOT NULL DEFAULT 0,
+    latency_ms_count INTEGER NOT NULL DEFAULT 0,
+    latency_ms_max INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, source_ip, provider)
+);
+CREATE INDEX IF NOT EXISTS idx_spd_day ON smtp_provider_daily (day);
 """
 
 
@@ -339,18 +377,20 @@ class Warmup:
     def __init__(
         self,
         db_path: str | Path,
-        start: int = 25,
-        max_cap: int = 1500,
-        days_to_max: int = 60,
+        schedule: tuple[tuple[int, int], ...] = DEFAULT_STEPPED_SCHEDULE,
         soft_block_threshold: float = 0.05,
         min_sample_before_breaker: int = 50,
         per_domain_cap: int = 40,
         source_ips: list[str] | None = None,
     ) -> None:
         self.db_path = str(db_path)
-        self.start = start
-        self.max_cap = max_cap
-        self.days_to_max = max(1, days_to_max)
+        self.schedule = tuple(sorted(schedule, key=lambda s: s[0]))
+        # Derived reference values for reporting / backward-compat in stats output.
+        self.start = self.schedule[0][1]
+        self.max_cap = self.schedule[-1][1]
+        # Last *finite* step's upper bound — the day at which we reach steady state.
+        finite_steps = [u for u, _ in self.schedule if u < 10**8]
+        self.days_to_max = max(finite_steps) if finite_steps else self.schedule[0][0]
         self.soft_block_threshold = soft_block_threshold
         self.min_sample = min_sample_before_breaker
         self.per_domain_cap = per_domain_cap
@@ -394,11 +434,12 @@ class Warmup:
         return max(0, int((time.time() - ts) // 86400))
 
     def current_cap(self, source_ip: str = "") -> int:
-        """Per-IP daily cap based on that IP's individual warmup age."""
+        """Per-IP daily cap from the stepped schedule based on that IP's age."""
         d = self._days_elapsed(source_ip)
-        if d >= self.days_to_max:
-            return self.max_cap
-        return self.start + int((self.max_cap - self.start) * d / self.days_to_max)
+        for upper_excl, cap in self.schedule:
+            if d < upper_excl:
+                return cap
+        return self.schedule[-1][1]
 
     def total_cap(self) -> int:
         """Total daily cap summed across all configured IPs (each at its own age)."""
@@ -448,11 +489,18 @@ class Warmup:
         return True, None
 
     def record_attempt(
-        self, smtp_code: int | None, target_domain: str | None = None, source_ip: str = ""
+        self,
+        smtp_code: int | None,
+        target_domain: str | None = None,
+        source_ip: str = "",
+        provider: str = "unknown",
+        response_ms: int | None = None,
     ) -> None:
         is_soft = 1 if (smtp_code in SOFT_BLOCK_CODES) else 0
+        is_hard = 1 if (smtp_code in HARD_BLOCK_CODES) else 0
         day = _today()
         now = int(time.time())
+        latency = int(response_ms) if response_ms and response_ms > 0 else 0
         with self._conn() as conn:
             self._ensure_today(conn, source_ip)
             conn.execute(
@@ -481,6 +529,22 @@ class Warmup:
                     "  attempts = attempts + 1, soft_blocks = soft_blocks + ?",
                     (day, source_ip, target_domain, is_soft, is_soft),
                 )
+            conn.execute(
+                "INSERT INTO smtp_provider_daily "
+                "(day, source_ip, provider, attempts, soft_blocks, hard_blocks, "
+                " latency_ms_sum, latency_ms_count, latency_ms_max) "
+                "VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(day, source_ip, provider) DO UPDATE SET "
+                "  attempts = attempts + 1, "
+                "  soft_blocks = soft_blocks + ?, "
+                "  hard_blocks = hard_blocks + ?, "
+                "  latency_ms_sum = latency_ms_sum + ?, "
+                "  latency_ms_count = latency_ms_count + ?, "
+                "  latency_ms_max = MAX(latency_ms_max, ?)",
+                (day, source_ip, provider,
+                 is_soft, is_hard, latency, 1 if latency else 0, latency,
+                 is_soft, is_hard, latency, 1 if latency else 0, latency),
+            )
             row = conn.execute(
                 "SELECT attempts, soft_blocks FROM smtp_daily_counters WHERE day = ? AND source_ip = ?",
                 (day, source_ip),
@@ -557,6 +621,14 @@ class Warmup:
                 (day,),
             ).fetchall()
 
+            provider_rows = conn.execute(
+                "SELECT source_ip, provider, attempts, soft_blocks, hard_blocks, "
+                "       latency_ms_sum, latency_ms_count, latency_ms_max "
+                "FROM smtp_provider_daily WHERE day = ? "
+                "ORDER BY source_ip, attempts DESC",
+                (day,),
+            ).fetchall()
+
         total = self.total_cap()
         per_ip = []
         for ip, first_seen, last_act, life_att, life_soft, a, s, p in ip_rows:
@@ -580,6 +652,21 @@ class Warmup:
                 "lifetime_soft_blocks": life_soft,
             })
 
+        per_provider = [
+            {
+                "source_ip": ip or "default",
+                "provider": p,
+                "attempts": a,
+                "soft_blocks": sb,
+                "hard_blocks": hb,
+                "soft_block_pct": round(100.0 * sb / a, 1) if a else 0.0,
+                "hard_block_pct": round(100.0 * hb / a, 1) if a else 0.0,
+                "latency_avg_ms": int(lsum / lcount) if lcount else 0,
+                "latency_max_ms": lmax,
+            }
+            for ip, p, a, sb, hb, lsum, lcount, lmax in provider_rows
+        ]
+
         return {
             "day": day,
             "attempts": attempts,
@@ -592,6 +679,10 @@ class Warmup:
             "days_to_max": self.days_to_max,
             "source_ip_count": len(per_ip),
             "per_ip": per_ip,
+            "per_provider": per_provider,
+            "schedule": [
+                {"days_upper_excl": u, "cap": c} for u, c in self.schedule
+            ],
             "top_domains_today": [
                 {"domain": d, "attempts": a, "soft_blocks": s} for d, a, s in top_domains
             ],

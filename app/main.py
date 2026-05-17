@@ -49,10 +49,9 @@ PACING_SECONDS = float(os.getenv("PACING_SECONDS", "0.3"))
 MAX_BATCH_SIZE = 50
 RATE_LIMIT = os.getenv("RATE_LIMIT", "500/minute")
 
-# ----- SMTP warm-up (env-configurable, conservative defaults) -----
-WARMUP_START = int(os.getenv("WARMUP_START_VOLUME", "25"))
-WARMUP_MAX = int(os.getenv("WARMUP_MAX_VOLUME", "1500"))
-WARMUP_DAYS_TO_MAX = int(os.getenv("WARMUP_DAYS_TO_MAX", "60"))
+# ----- SMTP warm-up -----
+# Daily-cap schedule lives in metrics.DEFAULT_STEPPED_SCHEDULE (B2B-tuned).
+# Only the operational knobs are env-tunable here.
 WARMUP_SOFT_BLOCK_THRESHOLD = float(os.getenv("WARMUP_SOFT_BLOCK_THRESHOLD", "0.05"))
 WARMUP_PER_DOMAIN_CAP = int(os.getenv("WARMUP_PER_DOMAIN_CAP", "40"))
 
@@ -133,9 +132,6 @@ async def lifespan(app: FastAPI):
     metrics = Metrics(DB_PATH)
     warmup = Warmup(
         DB_PATH,
-        start=WARMUP_START,
-        max_cap=WARMUP_MAX,
-        days_to_max=WARMUP_DAYS_TO_MAX,
         soft_block_threshold=WARMUP_SOFT_BLOCK_THRESHOLD,
         per_domain_cap=WARMUP_PER_DOMAIN_CAP,
         source_ips=SMTP_SOURCE_IPS,

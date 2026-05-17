@@ -21,6 +21,20 @@ type IpStat = {
   lifetime_soft_blocks: number;
 };
 
+type ProviderStat = {
+  source_ip: string;
+  provider: string;
+  attempts: number;
+  soft_blocks: number;
+  hard_blocks: number;
+  soft_block_pct: number;
+  hard_block_pct: number;
+  latency_avg_ms: number;
+  latency_max_ms: number;
+};
+
+type ScheduleStep = { days_upper_excl: number; cap: number };
+
 type SystemData = {
   warmup: {
     day: string;
@@ -34,6 +48,8 @@ type SystemData = {
     days_to_max: number;
     source_ip_count: number;
     per_ip: IpStat[];
+    per_provider: ProviderStat[];
+    schedule: ScheduleStep[];
     top_domains_today: { domain: string; attempts: number; soft_blocks: number }[];
   };
   volume_24h: { smtp: number; zerobounce: number; reoon: number; total: number };
@@ -109,6 +125,56 @@ export default function AdminSystemPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <div>
+        <h2 className="text-sm font-semibold text-slate-900 mb-2">
+          Per-provider signals today
+          <span className="ml-2 text-xs font-normal text-slate-400">
+            Observe-only — feeds the adaptive controller (Phase 2)
+          </span>
+        </h2>
+        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+          {warmup.per_provider.length === 0 ? (
+            <div className="text-sm text-slate-400 p-4">No SMTP activity yet today</div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+                <tr>
+                  <th className="text-left px-3 py-2 font-medium">IP</th>
+                  <th className="text-left px-3 py-2 font-medium">Provider</th>
+                  <th className="text-left px-3 py-2 font-medium">Attempts</th>
+                  <th className="text-left px-3 py-2 font-medium">Soft blocks</th>
+                  <th className="text-left px-3 py-2 font-medium">Hard blocks</th>
+                  <th className="text-left px-3 py-2 font-medium">Latency avg</th>
+                  <th className="text-left px-3 py-2 font-medium">Latency max</th>
+                </tr>
+              </thead>
+              <tbody>
+                {warmup.per_provider.map(p => {
+                  const softWarn = p.soft_block_pct >= 5;
+                  const softCrit = p.soft_block_pct >= 10;
+                  const hardAlert = p.hard_blocks > 0;
+                  return (
+                    <tr key={`${p.source_ip}-${p.provider}`} className="border-t border-slate-100">
+                      <td className="px-3 py-2 font-mono text-slate-700">{p.source_ip}</td>
+                      <td className="px-3 py-2">{p.provider}</td>
+                      <td className="px-3 py-2">{p.attempts.toLocaleString()}</td>
+                      <td className={`px-3 py-2 ${softCrit ? "text-red-600 font-medium" : softWarn ? "text-amber-600" : ""}`}>
+                        {p.soft_blocks} ({p.soft_block_pct}%)
+                      </td>
+                      <td className={`px-3 py-2 ${hardAlert ? "text-red-600 font-medium" : "text-slate-500"}`}>
+                        {p.hard_blocks} ({p.hard_block_pct}%)
+                      </td>
+                      <td className="px-3 py-2 text-slate-600">{p.latency_avg_ms}ms</td>
+                      <td className="px-3 py-2 text-slate-500">{p.latency_max_ms}ms</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
 
