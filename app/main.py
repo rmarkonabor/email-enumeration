@@ -50,6 +50,28 @@ PACING_SECONDS = float(os.getenv("PACING_SECONDS", "0.3"))
 MAX_BATCH_SIZE = int(os.getenv("MAX_BATCH_SIZE", "5000"))
 RATE_LIMIT = os.getenv("RATE_LIMIT", "500/minute")
 
+# ----- Multi-region -----
+# Label for this server's region (e.g. "us", "eu", "sea").
+# Jobs are tagged with this region at creation so workers on other servers
+# don't pick them up when sharing a DB.
+SERVER_REGION = os.getenv("SERVER_REGION", "us")
+
+# Comma-separated region=url pairs for admin server fan-out.
+# Example: us=https://verify1.mailcheckhq.com,eu=https://eu.verify.mailcheckhq.com
+def _parse_monitored_servers(raw: str) -> dict[str, str]:
+    servers: dict[str, str] = {}
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry or "=" not in entry:
+            continue
+        region, url = entry.split("=", 1)
+        servers[region.strip()] = url.strip().rstrip("/")
+    return servers
+
+MONITORED_SERVERS: dict[str, str] = _parse_monitored_servers(
+    os.getenv("MONITORED_SERVERS", "")
+)
+
 # Per-user daily quota for batch verification (used + pending + new <= quota).
 # Default sized so 5 users sharing a 3-IP day-60 pool (~17k/day) each get
 # ~3,500/day with 70% headroom. Override via env or per-user later.
@@ -150,8 +172,8 @@ async def lifespan(app: FastAPI):
     )
     app.state.finder = finder
 
-    job_store = JobStore(DB_PATH)
-    job_worker = JobWorker(store=job_store, finder=finder, warmup=warmup)
+    job_store = JobStore(DB_PATH, region=SERVER_REGION)
+    job_worker = JobWorker(store=job_store, finder=finder, warmup=warmup, region=SERVER_REGION)
     app.state.job_store = job_store
     app.state.job_worker = job_worker
     job_worker.start()
@@ -163,7 +185,10 @@ async def lifespan(app: FastAPI):
         logger.info("Startup cache purge: removed %d expired domains, %d expired emails", initial_d, initial_e)
     purge_task = asyncio.create_task(_purge_loop(cache, 60 * 60 * 24))
 
-    logger.info("Email finder started. db=%s helo=%s smtp_ips=%s", DB_PATH, HELO_HOSTNAME, SMTP_SOURCE_IPS or ["default"])
+    logger.info(
+        "Email finder started. region=%s db=%s helo=%s smtp_ips=%s",
+        SERVER_REGION, DB_PATH, HELO_HOSTNAME, SMTP_SOURCE_IPS or ["default"],
+    )
     if not API_KEY:
         logger.warning("API_KEY env var is empty. All requests will be rejected.")
     try:
@@ -887,17 +912,14 @@ async def admin_system(ctx: UserContext = Depends(require_admin)) -> dict:
     }
 
 
-@app.get(
-    "/admin/server",
-    summary="Hetzner server health — disk, memory, CPU, uptime (admin only)",
-)
-async def admin_server(ctx: UserContext = Depends(require_admin)) -> dict:
-    import time
+def _local_server_health() -> dict:
+    """Collect health metrics for the local machine."""
+    import time as _time
     try:
         import psutil
 
         boot_ts = psutil.boot_time()
-        uptime_s = int(time.time() - boot_ts)
+        uptime_s = int(_time.time() - boot_ts)
 
         mem = psutil.virtual_memory()
         memory = {
@@ -933,7 +955,6 @@ async def admin_server(ctx: UserContext = Depends(require_admin)) -> dict:
         total, used, free = shutil.disk_usage(DB_PATH if DB_PATH.startswith("/") else "/")
         db_path = Path(DB_PATH)
         db_size_mb = round(db_path.stat().st_size / 1024 / 1024, 2) if db_path.exists() else 0
-        boot_ts = 0
         uptime_s = 0
         try:
             with open("/proc/uptime") as f:
@@ -954,12 +975,59 @@ async def admin_server(ctx: UserContext = Depends(require_admin)) -> dict:
     uptime_h = uptime_s // 3600
     uptime_m = (uptime_s % 3600) // 60
     return {
+        "region": SERVER_REGION,
         "uptime_seconds": uptime_s,
         "uptime_human": f"{uptime_h}h {uptime_m}m",
         "disk": disk_info,
         "memory": memory,
         "cpu": cpu,
     }
+
+
+@app.get(
+    "/admin/server",
+    summary="Server health — disk, memory, CPU, uptime. Fans out to all MONITORED_SERVERS (admin only)",
+)
+async def admin_server(request: Request, ctx: UserContext = Depends(require_admin)) -> dict:
+    own = _local_server_health()
+
+    if not MONITORED_SERVERS:
+        return {"servers": [own]}
+
+    # Fan out to every configured server, skipping self (matched by region label).
+    api_key = request.headers.get("x-api-key", "")
+    other_regions = {r: u for r, u in MONITORED_SERVERS.items() if r != SERVER_REGION}
+
+    async def _fetch(region: str, url: str) -> dict:
+        try:
+            async with _httpx.AsyncClient(timeout=5) as client:
+                r = await client.get(
+                    f"{url}/admin/server",
+                    headers={"X-API-Key": api_key},
+                )
+            if r.status_code != 200:
+                return {"region": region, "error": f"HTTP {r.status_code}"}
+            data = r.json()
+            # Remote returns {"servers": [...]} — unwrap our own entry from it.
+            if "servers" in data:
+                entry = next(
+                    (s for s in data["servers"] if s.get("region") == region),
+                    data["servers"][0] if data["servers"] else {},
+                )
+            else:
+                entry = data
+            entry["region"] = region
+            return entry
+        except Exception as e:
+            return {"region": region, "error": str(e)}
+
+    remote_results = await asyncio.gather(
+        *[_fetch(r, u) for r, u in other_regions.items()]
+    )
+
+    # Own server first, then remotes sorted by region name.
+    servers = [own, *sorted(remote_results, key=lambda s: s.get("region", ""))]
+    return {"servers": servers}
 
 
 @app.post(

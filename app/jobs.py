@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS batch_jobs (
     verify_provider TEXT NOT NULL DEFAULT 'smtp',
     zerobounce_api_key TEXT,
     reoon_api_key TEXT,
+    region TEXT NOT NULL DEFAULT 'us',
     created_at INTEGER NOT NULL,
     started_at INTEGER,
     completed_at INTEGER,
@@ -54,7 +55,12 @@ CREATE TABLE IF NOT EXISTS batch_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_bj_user ON batch_jobs (user_id);
 CREATE INDEX IF NOT EXISTS idx_bj_status ON batch_jobs (status, created_at);
+CREATE INDEX IF NOT EXISTS idx_bj_region ON batch_jobs (region, status, created_at);
 """
+
+_MIGRATION_ADD_REGION = (
+    "ALTER TABLE batch_jobs ADD COLUMN region TEXT NOT NULL DEFAULT 'us'"
+)
 
 
 @dataclass
@@ -70,16 +76,24 @@ class QuotaCheck:
 class JobStore:
     """SQLite-backed persistence for batch jobs. Thread/process-safe via WAL."""
 
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(self, db_path: str | Path, region: str = "us") -> None:
         self.db_path = str(db_path)
+        self.region = region
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             conn.executescript(SCHEMA)
-            # Reset any "running" jobs left over from a crash back to queued so
-            # the worker re-picks them up cleanly.
+            # Migrate existing DB: add region column if not present.
+            try:
+                conn.execute(_MIGRATION_ADD_REGION)
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # column already exists
+            # Reset running jobs for THIS region only — safe on shared DB when
+            # multiple regional servers restart independently.
             conn.execute(
                 "UPDATE batch_jobs SET status = 'queued', started_at = NULL "
-                "WHERE status = 'running'"
+                "WHERE status = 'running' AND region = ?",
+                (region,),
             )
             conn.commit()
 
@@ -98,16 +112,19 @@ class JobStore:
         verify_provider: str,
         zerobounce_api_key: str = "",
         reoon_api_key: str = "",
+        region: str | None = None,
     ) -> str:
         job_id = uuid.uuid4().hex
+        job_region = region if region is not None else self.region
         with self._conn() as conn:
             conn.execute(
                 "INSERT INTO batch_jobs "
                 "(id, user_id, status, contacts, total, verify_provider, "
-                " zerobounce_api_key, reoon_api_key, created_at) "
-                "VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?)",
+                " zerobounce_api_key, reoon_api_key, region, created_at) "
+                "VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)",
                 (job_id, user_id, json.dumps(contacts), len(contacts),
-                 verify_provider, zerobounce_api_key, reoon_api_key, int(time.time())),
+                 verify_provider, zerobounce_api_key, reoon_api_key,
+                 job_region, int(time.time())),
             )
             conn.commit()
         return job_id
@@ -196,7 +213,7 @@ class JobStore:
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT id, user_id, status, contacts, total, done_count, results, "
-                "verify_provider, created_at, started_at, completed_at, error, "
+                "verify_provider, region, created_at, started_at, completed_at, error, "
                 "cancel_requested FROM batch_jobs WHERE id = ?",
                 (job_id,),
             ).fetchone()
@@ -206,40 +223,43 @@ class JobStore:
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT id, user_id, status, total, done_count, verify_provider, "
-                "created_at, started_at, completed_at, error "
+                "region, created_at, started_at, completed_at, error "
                 "FROM batch_jobs WHERE user_id = ? "
                 "ORDER BY created_at DESC LIMIT ?",
                 (user_id, limit),
             ).fetchall()
         return [self._summary_row(r) for r in rows]
 
-    def users_with_active_jobs(self) -> list[str]:
-        """Distinct user_ids with at least one active job, ordered by their
-        oldest active job's creation time (so the longest-waiting user is
-        served first in the round-robin refill)."""
+    def users_with_active_jobs(self, region: str | None = None) -> list[str]:
+        """Distinct user_ids with at least one active job for this region,
+        ordered by their oldest active job's creation time."""
+        r = region if region is not None else self.region
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT user_id FROM batch_jobs "
-                "WHERE status IN ('queued','running') "
+                "WHERE status IN ('queued','running') AND region = ? "
                 "GROUP BY user_id "
                 "ORDER BY MIN(created_at)",
+                (r,),
             ).fetchall()
         return [r["user_id"] for r in rows]
 
-    def next_active_job_for_user(self, user_id: str) -> dict | None:
+    def next_active_job_for_user(self, user_id: str, region: str | None = None) -> dict | None:
+        r = region if region is not None else self.region
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT id, user_id, status, contacts, total, done_count, results, "
-                "verify_provider, zerobounce_api_key, reoon_api_key, created_at "
+                "verify_provider, zerobounce_api_key, reoon_api_key, region, created_at "
                 "FROM batch_jobs "
-                "WHERE user_id = ? AND status IN ('queued','running') "
+                "WHERE user_id = ? AND status IN ('queued','running') AND region = ? "
                 "ORDER BY created_at LIMIT 1",
-                (user_id,),
+                (user_id, r),
             ).fetchone()
         return self._row_to_dict(row, include_secrets=True) if row else None
 
     def pending_count_for_user(self, user_id: str) -> int:
-        """Total contacts queued or in-flight (not yet processed) for this user."""
+        """Total contacts queued or in-flight across ALL regions for this user.
+        Intentionally global — quota is per-user, not per-region."""
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT COALESCE(SUM(total - done_count), 0) FROM batch_jobs "
@@ -248,38 +268,42 @@ class JobStore:
             ).fetchone()
         return int(row[0])
 
-    def reset_stale_running_jobs(self, stale_after_seconds: int = 3600) -> int:
-        """Reset jobs that have been stuck in 'running' for too long back to
-        'queued' so the worker re-attempts them. Returns the number reset."""
+    def reset_stale_running_jobs(self, stale_after_seconds: int = 3600,
+                                  region: str | None = None) -> int:
+        """Reset jobs stuck in 'running' for too long back to 'queued'.
+        Scoped to this server's region so restarts on one server don't
+        disturb another region's in-flight jobs."""
+        r = region if region is not None else self.region
         cutoff = int(time.time()) - stale_after_seconds
         with self._conn() as conn:
             cur = conn.execute(
                 "UPDATE batch_jobs SET status = 'queued', started_at = NULL "
                 "WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ? "
-                "AND done_count < total",
-                (cutoff,),
+                "AND done_count < total AND region = ?",
+                (cutoff, r),
             )
             conn.commit()
             return cur.rowcount
 
     def queue_position(self, job_id: str) -> int:
-        """How many jobs are ahead of this one in the FIFO. 0 = next."""
+        """How many same-region jobs are ahead of this one in the FIFO. 0 = next."""
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT created_at FROM batch_jobs WHERE id = ?", (job_id,)
+                "SELECT created_at, region FROM batch_jobs WHERE id = ?", (job_id,)
             ).fetchone()
             if not row:
                 return -1
             ahead = conn.execute(
                 "SELECT COUNT(*) FROM batch_jobs "
-                "WHERE status IN ('queued','running') AND created_at < ?",
-                (row[0],),
+                "WHERE status IN ('queued','running') AND region = ? AND created_at < ?",
+                (row["region"], row["created_at"]),
             ).fetchone()[0]
         return int(ahead)
 
     # ------------------------------------------------------------ row helpers
     @staticmethod
     def _row_to_dict(row: sqlite3.Row, include_secrets: bool = False) -> dict:
+        keys = row.keys()
         out = {
             "id": row["id"],
             "user_id": row["user_id"],
@@ -289,11 +313,12 @@ class JobStore:
             "done_count": row["done_count"],
             "results": json.loads(row["results"]),
             "verify_provider": row["verify_provider"],
+            "region": row["region"] if "region" in keys else "us",
             "created_at": JobStore._iso(row["created_at"]),
-            "started_at": JobStore._iso(row["started_at"]) if "started_at" in row.keys() else None,
-            "completed_at": JobStore._iso(row["completed_at"]) if "completed_at" in row.keys() else None,
-            "error": row["error"] if "error" in row.keys() else None,
-            "cancel_requested": bool(row["cancel_requested"]) if "cancel_requested" in row.keys() else False,
+            "started_at": JobStore._iso(row["started_at"]) if "started_at" in keys else None,
+            "completed_at": JobStore._iso(row["completed_at"]) if "completed_at" in keys else None,
+            "error": row["error"] if "error" in keys else None,
+            "cancel_requested": bool(row["cancel_requested"]) if "cancel_requested" in keys else False,
         }
         if include_secrets:
             out["zerobounce_api_key"] = row["zerobounce_api_key"]
@@ -302,6 +327,7 @@ class JobStore:
 
     @staticmethod
     def _summary_row(row: sqlite3.Row) -> dict:
+        keys = row.keys()
         return {
             "id": row["id"],
             "user_id": row["user_id"],
@@ -309,6 +335,7 @@ class JobStore:
             "total": row["total"],
             "done_count": row["done_count"],
             "verify_provider": row["verify_provider"],
+            "region": row["region"] if "region" in keys else "us",
             "created_at": JobStore._iso(row["created_at"]),
             "started_at": JobStore._iso(row["started_at"]),
             "completed_at": JobStore._iso(row["completed_at"]),
@@ -365,6 +392,7 @@ class JobWorker:
         store: JobStore,
         finder: Any,
         warmup: Any,
+        region: str = "us",
         pool_exhausted_sleep: float = 60.0,
         idle_sleep: float = 2.0,
         per_contact_sleep: float = 0.1,
@@ -372,6 +400,7 @@ class JobWorker:
         self.store = store
         self.finder = finder
         self.warmup = warmup
+        self.region = region
         self.pool_exhausted_sleep = pool_exhausted_sleep
         self.idle_sleep = idle_sleep
         self.per_contact_sleep = per_contact_sleep
@@ -420,10 +449,10 @@ class JobWorker:
                 await asyncio.sleep(5)
 
     def _next_user(self) -> str | None:
-        """Round-robin: keep an in-memory queue of users with pending work,
-        refilling from the DB when empty. New users get added to the back."""
+        """Round-robin: keep an in-memory queue of users with pending work for
+        this region, refilling from the DB when empty."""
         if not self._rotation:
-            active = self.store.users_with_active_jobs()
+            active = self.store.users_with_active_jobs(region=self.region)
             if not active:
                 return None
             self._rotation.extend(active)
@@ -436,7 +465,7 @@ class JobWorker:
             self._consecutive_skips = 0
             return
 
-        job = self.store.next_active_job_for_user(user_id)
+        job = self.store.next_active_job_for_user(user_id, region=self.region)
         if not job:
             self._consecutive_skips = 0
             return  # User's jobs all completed between rotation snapshot and now

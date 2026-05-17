@@ -56,17 +56,19 @@ type SystemData = {
   pool_exhausted: boolean;
 };
 
-type ServerData = {
-  uptime_seconds: number;
-  uptime_human: string;
-  disk: { total_gb: number; used_gb: number; free_gb: number; percent: number; db_size_mb: number };
-  memory: { total_mb: number; used_mb: number; available_mb: number; percent: number };
-  cpu: { load1: number; load5: number; load15: number; load1_pct: number; count: number };
+type ServerEntry = {
+  region: string;
+  uptime_seconds?: number;
+  uptime_human?: string;
+  disk?: { total_gb: number; used_gb: number; free_gb: number; percent: number; db_size_mb: number };
+  memory?: { total_mb: number; used_mb: number; available_mb: number; percent: number };
+  cpu?: { load1: number; load5: number; load15: number; load1_pct: number; count: number };
+  error?: string;
 };
 
 export default function AdminSystemPage() {
   const [data, setData] = useState<SystemData | null>(null);
-  const [server, setServer] = useState<ServerData | null>(null);
+  const [servers, setServers] = useState<ServerEntry[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, []);
@@ -80,7 +82,10 @@ export default function AdminSystemPage() {
       ]);
       if (!sysRes.ok) { setErr(`HTTP ${sysRes.status}`); return; }
       setData(await sysRes.json());
-      if (srvRes.ok) setServer(await srvRes.json());
+      if (srvRes.ok) {
+        const d = await srvRes.json();
+        setServers(d.servers ?? []);
+      }
       setErr(null);
     } catch (e: any) { setErr(e.message); }
   }
@@ -92,7 +97,11 @@ export default function AdminSystemPage() {
 
   return (
     <div className="space-y-6">
-      {server && <ServerHealth s={server} />}
+      {servers.length > 0 && (
+        <div className="space-y-3">
+          {servers.map(s => <ServerHealthCard key={s.region} s={s} />)}
+        </div>
+      )}
       {pool_exhausted && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-800">
           <strong>SMTP pool exhausted.</strong> All configured IPs are at cap or paused. New SMTP requests will be rejected (HTTP 503) until UTC midnight.
@@ -227,15 +236,30 @@ function UsageBar({ pct, warn = 70, crit = 85 }: { pct: number; warn?: number; c
   );
 }
 
-function ServerHealth({ s }: { s: ServerData }) {
+function ServerHealthCard({ s }: { s: ServerEntry }) {
+  const label = s.region.toUpperCase();
+
+  if (s.error || !s.disk || !s.memory || !s.cpu) {
+    return (
+      <div className="bg-white border border-red-200 rounded-xl p-4">
+        <div className="flex items-center gap-2 mb-1">
+          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</span>
+          <span className="text-xs text-red-600">unreachable</span>
+        </div>
+        <div className="text-sm text-red-500">{s.error ?? "No data"}</div>
+      </div>
+    );
+  }
+
   const diskWarn = s.disk.percent >= 85;
   const memWarn = s.memory.percent >= 85;
   const cpuWarn = s.cpu.load1_pct >= 80;
 
   return (
     <div>
-      <h2 className="text-sm font-semibold text-slate-900 mb-2">Server health
-        <span className="ml-2 text-xs font-normal text-slate-400">Hetzner · refreshes every 15s</span>
+      <h2 className="text-sm font-semibold text-slate-900 mb-2">
+        Server health — <span className="text-indigo-600">{label}</span>
+        <span className="ml-2 text-xs font-normal text-slate-400">refreshes every 15s</span>
       </h2>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="bg-white border border-slate-200 rounded-xl p-4">
