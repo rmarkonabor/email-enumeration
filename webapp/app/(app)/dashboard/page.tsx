@@ -27,7 +27,6 @@ type Stats = {
   verified: number;
   catch_all: number;
   not_found: number;
-  other: number;
   total_enumerations: number;
   total_credits: number;
   avg_enumerations_per_verified: number;
@@ -203,12 +202,6 @@ export default function DashboardPage() {
               color="text-slate-600"
             />
             <MetricCard
-              label="Error / Unknown"
-              value={stats.other}
-              sub={pct(stats.other, stats.total)}
-              color="text-red-500"
-            />
-            <MetricCard
               label="Total enumerations"
               value={stats.total_enumerations}
               sub="email formats tried"
@@ -234,13 +227,11 @@ export default function DashboardPage() {
                 {stats.verified  > 0 && <div className="bg-emerald-500" style={{ flex: stats.verified }} title={`Verified: ${stats.verified}`} />}
                 {stats.catch_all > 0 && <div className="bg-amber-400"  style={{ flex: stats.catch_all }} title={`Catch-all: ${stats.catch_all}`} />}
                 {stats.not_found > 0 && <div className="bg-slate-300"  style={{ flex: stats.not_found }} title={`Not found: ${stats.not_found}`} />}
-                {stats.other     > 0 && <div className="bg-red-300"    style={{ flex: stats.other }}     title={`Error: ${stats.other}`} />}
               </div>
               <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2.5 text-xs text-slate-500">
                 <span><span className="inline-block w-2 h-2 rounded-sm bg-emerald-500 mr-1" />Verified {pct(stats.verified, stats.total)}</span>
                 <span><span className="inline-block w-2 h-2 rounded-sm bg-amber-400 mr-1" />Catch-all {pct(stats.catch_all, stats.total)}</span>
                 <span><span className="inline-block w-2 h-2 rounded-sm bg-slate-300 mr-1" />Not found {pct(stats.not_found, stats.total)}</span>
-                <span><span className="inline-block w-2 h-2 rounded-sm bg-red-300 mr-1" />Error {pct(stats.other, stats.total)}</span>
               </div>
             </div>
           )}

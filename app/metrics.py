@@ -378,24 +378,23 @@ class Metrics:
                   SUM(CASE WHEN status='verified'  THEN 1 ELSE 0 END) AS verified,
                   SUM(CASE WHEN status='catch_all' THEN 1 ELSE 0 END) AS catch_all,
                   SUM(CASE WHEN status='not_found' THEN 1 ELSE 0 END) AS not_found,
-                  SUM(CASE WHEN status NOT IN ('verified','catch_all','not_found') THEN 1 ELSE 0 END) AS other,
                   SUM(COALESCE(candidates_tried, 0)) AS total_enumerations,
                   SUM(COALESCE(credits_used, 0)) AS total_credits,
                   SUM(CASE WHEN status='verified' THEN COALESCE(candidates_tried, 0) ELSE 0 END) AS enum_verified_sum,
                   COUNT(CASE WHEN status='verified' THEN 1 END) AS verified_count2
                 FROM verification_log
                 WHERE user_id = ? AND ts >= ?
+                  AND status IN ('verified', 'catch_all', 'not_found')
                 """,
                 (user_id, cutoff),
             ).fetchone()
-            total, verified, catch_all, not_found, other, total_enum, total_credits, \
+            total, verified, catch_all, not_found, total_enum, total_credits, \
                 enum_verified_sum, verified_count2 = row
 
             total = total or 0
             verified = verified or 0
             catch_all = catch_all or 0
             not_found = not_found or 0
-            other = other or 0
             total_enum = total_enum or 0
             total_credits = total_credits or 0
             avg_enum = round(enum_verified_sum / verified_count2, 2) if verified_count2 else 0
@@ -411,6 +410,7 @@ class Metrics:
                   SUM(COALESCE(credits_used, 0)) AS credits
                 FROM verification_log
                 WHERE user_id = ? AND ts >= ?
+                  AND status IN ('verified', 'catch_all', 'not_found')
                 GROUP BY day
                 ORDER BY day
                 """,
@@ -422,7 +422,6 @@ class Metrics:
             "verified": verified,
             "catch_all": catch_all,
             "not_found": not_found,
-            "other": other,
             "total_enumerations": total_enum,
             "total_credits": total_credits,
             "avg_enumerations_per_verified": avg_enum,
