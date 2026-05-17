@@ -516,40 +516,54 @@ class JobWorker:
 
         self._consecutive_skips = 0
         contact = job["contacts"][job["done_count"]]
-        try:
-            result = await self.finder.find(
-                first_name=contact["first_name"],
-                last_name=contact["last_name"],
-                domain=contact["domain"],
-                middle_name=contact.get("middle_name"),
-                return_attempts=False,
-                provider=job["verify_provider"],
-                provider_key=(job.get("zerobounce_api_key")
-                              if job["verify_provider"] == "zerobounce"
-                              else job.get("reoon_api_key") or ""),
-                user_id=user_id,
-            )
-            response = {
-                "request": contact,
-                "email": result.email,
-                "status": result.status,
-                "catch_all": result.catch_all,
-                "candidates_tried": result.candidates_tried,
-                "mail_provider": result.mail_provider,
-                "credits_used": result.credits_used,
-            }
-        except Exception as e:
-            logger.warning("Contact processing failed (job=%s): %s", job["id"], e)
+
+        if not (str(contact.get("first_name", "")).strip()
+                and str(contact.get("last_name", "")).strip()
+                and str(contact.get("domain", "")).strip()):
             response = {
                 "request": contact,
                 "email": None,
-                "status": "error",
+                "status": "skipped",
                 "catch_all": False,
                 "candidates_tried": 0,
                 "mail_provider": None,
                 "credits_used": 0,
-                "error": str(e)[:200],
             }
+        else:
+            try:
+                result = await self.finder.find(
+                    first_name=contact["first_name"],
+                    last_name=contact["last_name"],
+                    domain=contact["domain"],
+                    middle_name=contact.get("middle_name"),
+                    return_attempts=False,
+                    provider=job["verify_provider"],
+                    provider_key=(job.get("zerobounce_api_key")
+                                  if job["verify_provider"] == "zerobounce"
+                                  else job.get("reoon_api_key") or ""),
+                    user_id=user_id,
+                )
+                response = {
+                    "request": contact,
+                    "email": result.email,
+                    "status": result.status,
+                    "catch_all": result.catch_all,
+                    "candidates_tried": result.candidates_tried,
+                    "mail_provider": result.mail_provider,
+                    "credits_used": result.credits_used,
+                }
+            except Exception as e:
+                logger.warning("Contact processing failed (job=%s): %s", job["id"], e)
+                response = {
+                    "request": contact,
+                    "email": None,
+                    "status": "error",
+                    "catch_all": False,
+                    "candidates_tried": 0,
+                    "mail_provider": None,
+                    "credits_used": 0,
+                    "error": str(e)[:200],
+                }
 
         self.store.append_result(job["id"], response)
 

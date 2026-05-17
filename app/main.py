@@ -282,8 +282,24 @@ class FeedbackRequest(BaseModel):
     notes: str | None = Field(default=None, max_length=500)
 
 
+class BatchContact(BaseModel):
+    """Lenient contact model for batch submissions — missing fields are skipped."""
+    first_name: str = Field(default="")
+    last_name: str = Field(default="")
+    domain: str = Field(default="")
+    middle_name: str | None = Field(default=None)
+
+
+def _contact_valid(c: dict) -> bool:
+    return bool(
+        str(c.get("first_name", "")).strip()
+        and str(c.get("last_name", "")).strip()
+        and str(c.get("domain", "")).strip()
+    )
+
+
 class BatchRequest(BaseModel):
-    contacts: list[FindRequest] = Field(..., min_length=1, max_length=MAX_BATCH_SIZE)
+    contacts: list[BatchContact] = Field(..., min_length=1, max_length=MAX_BATCH_SIZE)
     verify_provider: str = Field(default="smtp")
     zerobounce_api_key: str = Field(default="")
     reoon_api_key: str = Field(default="")
@@ -474,6 +490,10 @@ async def find_batch_stream(request: Request, req: BatchRequest,
         total = len(req.contacts)
         yield f"data: {json.dumps({'type': 'start', 'total': total})}\n\n"
         for i, contact in enumerate(req.contacts):
+            c = contact.model_dump()
+            if not _contact_valid(c):
+                yield f"data: {json.dumps({'type': 'contact_done', 'index': i, 'email': None, 'status': 'skipped', 'catch_all': False, 'candidates_tried': 0, 'message': 'Missing first name, last name, or domain.', 'fallback_recommended': False})}\n\n"
+                continue
             yield f"data: {json.dumps({'type': 'contact_start', 'index': i, 'name': f'{contact.first_name} {contact.last_name}', 'domain': contact.domain})}\n\n"
             try:
                 batch_provider_key = req.zerobounce_api_key if req.verify_provider == "zerobounce" else (req.reoon_api_key if req.verify_provider == "reoon" else "")
@@ -555,36 +575,44 @@ def _estimate_eta_seconds(store: JobStore, warmup: Warmup, contacts_ahead: int) 
 @limiter.limit(RATE_LIMIT)
 async def find_batch(request: Request, req: BatchRequest,
                       ctx: UserContext = Depends(require_api_key)):
-    quota_snapshot = _enforce_quota(ctx, len(req.contacts))
+    all_contacts = [c.model_dump() for c in req.contacts]
+    valid_contacts = [c for c in all_contacts if _contact_valid(c)]
+    skipped = len(all_contacts) - len(valid_contacts)
+    if skipped:
+        logger.info("Batch submission: skipping %d contact(s) with missing fields", skipped)
+
+    if not valid_contacts:
+        raise HTTPException(status_code=422, detail="All contacts are missing required fields (first_name, last_name, domain).")
+
+    quota_snapshot = _enforce_quota(ctx, len(valid_contacts))
 
     # --- Large batches: enqueue and return immediately ---
-    if len(req.contacts) > SYNC_THRESHOLD:
+    if len(valid_contacts) > SYNC_THRESHOLD:
         store: JobStore = app.state.job_store
         warmup: Warmup = app.state.warmup
         job_id = store.create(
             user_id=ctx.user_id or "",
-            contacts=[c.model_dump() for c in req.contacts],
+            contacts=valid_contacts,
             verify_provider=req.verify_provider,
             zerobounce_api_key=req.zerobounce_api_key,
             reoon_api_key=req.reoon_api_key,
         )
         position = store.queue_position(job_id)
-        # Contacts ahead in the global queue (other users' pending work)
         all_users = store.users_with_active_jobs()
         contacts_ahead = sum(store.pending_count_for_user(u) for u in all_users
-                              if u != (ctx.user_id or "")) + len(req.contacts)
+                              if u != (ctx.user_id or "")) + len(valid_contacts)
         eta = _estimate_eta_seconds(store, warmup, contacts_ahead)
         return JobAcceptedResponse(
             job_id=job_id,
             status="queued",
-            total=len(req.contacts),
+            total=len(valid_contacts),
             queue_position=position,
             eta_seconds=eta,
             quota=quota_snapshot,
             sync_threshold=SYNC_THRESHOLD,
         )
 
-    # --- Small batches: existing synchronous path ---
+    # --- Small batches: synchronous path ---
     _check_smtp_pool(req.verify_provider)
     finder: EmailFinder = app.state.finder
 
@@ -594,36 +622,39 @@ async def find_batch(request: Request, req: BatchRequest,
         else ""
     )
 
-    async def _one(contact: FindRequest) -> FindResponse:
+    _skipped_response = FindResponse(
+        email=None, status="skipped", catch_all=False, candidates_tried=0,
+        message="Missing first name, last name, or domain.", fallback_recommended=False,
+    )
+
+    async def _one(contact: dict) -> FindResponse:
+        if not _contact_valid(contact):
+            return _skipped_response
         try:
             result = await finder.find(
-                first_name=contact.first_name,
-                last_name=contact.last_name,
-                domain=contact.domain,
-                middle_name=contact.middle_name,
-                return_attempts=contact.return_attempts,
+                first_name=contact["first_name"],
+                last_name=contact["last_name"],
+                domain=contact["domain"],
+                middle_name=contact.get("middle_name"),
+                return_attempts=False,
                 provider=req.verify_provider,
                 provider_key=_batch_provider_key,
                 user_id=ctx.user_id,
             )
-            return _to_response(result, contact.return_attempts)
+            return _to_response(result, False)
         except ValueError as e:
             return FindResponse(
-                email=None,
-                status="error",
-                catch_all=False,
-                candidates_tried=0,
-                message=str(e),
-                fallback_recommended=False,
+                email=None, status="error", catch_all=False, candidates_tried=0,
+                message=str(e), fallback_recommended=False,
             )
 
     sem = asyncio.Semaphore(5)
 
-    async def _bounded(c: FindRequest) -> FindResponse:
+    async def _bounded(c: dict) -> FindResponse:
         async with sem:
             return await _one(c)
 
-    results = await asyncio.gather(*(_bounded(c) for c in req.contacts))
+    results = await asyncio.gather(*(_bounded(c) for c in all_contacts))
     return BatchResponse(results=results)
 
 
