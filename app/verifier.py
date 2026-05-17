@@ -414,7 +414,7 @@ class EmailFinder:
                     self.metrics.log_result(provider, candidate, "catch_all", None, response_ms,
                                             user_id=user_id, candidates_tried=len(attempts),
                                             credits_used=credits_used)
-                yield _done_event(candidates[0], "catch_all", True, attempts, True, mail_provider, credits_used)
+                yield _done_event(candidates[0] if candidates else None, "catch_all", True, attempts, True, mail_provider, credits_used)
                 return
 
         if self.metrics is not None:

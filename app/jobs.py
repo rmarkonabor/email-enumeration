@@ -508,6 +508,10 @@ class JobWorker:
                     await asyncio.sleep(min(5.0, self.pool_exhausted_sleep - slept))
                     slept += 5.0
                 self._consecutive_skips = 0
+            else:
+                # Yield to the event loop so request handlers aren't blocked
+                # while we cycle through all users checking for exhaustion.
+                await asyncio.sleep(0)
             return
 
         self._consecutive_skips = 0
