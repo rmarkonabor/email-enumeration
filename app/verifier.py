@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from .cache import Cache
 from .metrics import Metrics, Warmup
 from .permutations import generate_permutations
+from .provider_classifier import classify as classify_provider
 from .smtp_verifier import SMTPVerifier
 from .third_party_verifier import verify_third_party
 
@@ -113,6 +114,8 @@ class EmailFinder:
                 provider, provider_key, user_id=user_id,
             )
 
+        mx_hosts = await self.verifier.get_mx_records(domain)
+        provider_bucket = classify_provider(mx_hosts)
         mail_provider = await self.verifier.detect_mail_provider(domain)
 
         catch_all = self.cache.get_catch_all(domain)
@@ -123,9 +126,12 @@ class EmailFinder:
                                   candidates_tried=0,
                                   attempts=[{"status": "throttled", "reason": block_reason}] if return_attempts else [],
                                   mail_provider=mail_provider)
+            t0 = time.perf_counter()
             catch_all = await self.verifier.is_catch_all(domain, source_ip=ca_ip)
+            ca_latency = int((time.perf_counter() - t0) * 1000)
             if self.warmup is not None:
-                self.warmup.record_attempt(None, domain, source_ip=ca_ip or "")
+                self.warmup.record_attempt(None, domain, source_ip=ca_ip or "",
+                                            provider=provider_bucket, response_ms=ca_latency)
             self.cache.set_catch_all(domain, catch_all)
         if catch_all:
             best_guess = generate_permutations(first_name, last_name, domain, middle_name)
@@ -160,7 +166,8 @@ class EmailFinder:
             response_ms = int((time.perf_counter() - t0) * 1000)
             self.cache.set_verified(candidate, result.status)
             if self.warmup is not None:
-                self.warmup.record_attempt(result.response_code, domain, source_ip=source_ip or "")
+                self.warmup.record_attempt(result.response_code, domain, source_ip=source_ip or "",
+                                            provider=provider_bucket, response_ms=response_ms)
             if self.metrics is not None:
                 self.metrics.log_result("smtp", candidate, result.status, result.response_code,
                                          response_ms, user_id=user_id)
@@ -247,6 +254,8 @@ class EmailFinder:
                 yield event
             return
 
+        mx_hosts = await self.verifier.get_mx_records(domain)
+        provider_bucket = classify_provider(mx_hosts)
         mail_provider = await self.verifier.detect_mail_provider(domain)
         if mail_provider:
             yield {"type": "mail_provider", "mail_provider": mail_provider}
@@ -260,9 +269,12 @@ class EmailFinder:
                 yield {"type": "attempt", "status": "throttled", "reason": block_reason}
                 yield _done_event(None, "throttled", False, [], True, mail_provider)
                 return
+            t0 = time.perf_counter()
             catch_all = await self.verifier.is_catch_all(domain, source_ip=ca_ip)
+            ca_latency = int((time.perf_counter() - t0) * 1000)
             if self.warmup is not None:
-                self.warmup.record_attempt(None, domain, source_ip=ca_ip or "")
+                self.warmup.record_attempt(None, domain, source_ip=ca_ip or "",
+                                            provider=provider_bucket, response_ms=ca_latency)
             self.cache.set_catch_all(domain, catch_all)
         yield {"type": "catch_all", "catch_all": catch_all, "cached": cached_ca}
 
@@ -305,7 +317,8 @@ class EmailFinder:
             response_ms = int((time.perf_counter() - t0) * 1000)
             self.cache.set_verified(candidate, result.status)
             if self.warmup is not None:
-                self.warmup.record_attempt(result.response_code, domain, source_ip=source_ip or "")
+                self.warmup.record_attempt(result.response_code, domain, source_ip=source_ip or "",
+                                            provider=provider_bucket, response_ms=response_ms)
             if self.metrics is not None:
                 self.metrics.log_result("smtp", candidate, result.status, result.response_code,
                                          response_ms, user_id=user_id)
