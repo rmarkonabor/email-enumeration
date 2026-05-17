@@ -168,16 +168,21 @@ class EmailFinder:
             if self.warmup is not None:
                 self.warmup.record_attempt(result.response_code, domain, source_ip=source_ip or "",
                                             provider=provider_bucket, response_ms=response_ms)
-            if self.metrics is not None:
-                self.metrics.log_result("smtp", candidate, result.status, result.response_code,
-                                         response_ms, user_id=user_id)
             attempts.append({"email": candidate, "status": result.status, "code": result.response_code})
 
             if result.status == "verified":
+                if self.metrics is not None:
+                    self.metrics.log_result("smtp", candidate, result.status, result.response_code,
+                                            response_ms, user_id=user_id,
+                                            candidates_tried=len(attempts), credits_used=0)
                 return FindResult(email=candidate, status="verified", catch_all=False,
                                   candidates_tried=len(attempts),
                                   attempts=attempts if return_attempts else [],
                                   mail_provider=mail_provider)
+            if self.metrics is not None:
+                self.metrics.log_result("smtp", candidate, result.status, result.response_code,
+                                        response_ms, user_id=user_id,
+                                        candidates_tried=len(attempts), credits_used=0)
             if self.pacing_seconds > 0:
                 await asyncio.sleep(self.pacing_seconds)
 
@@ -210,23 +215,33 @@ class EmailFinder:
             response_ms = int((time.perf_counter() - t0) * 1000)
             if billed:
                 credits_used += 1
-            if self.metrics is not None:
-                self.metrics.log_result(provider, candidate, status, None, response_ms, user_id=user_id)
             attempts.append({"email": candidate, "status": status, "provider": provider})
 
             if status == "verified":
+                if self.metrics is not None:
+                    self.metrics.log_result(provider, candidate, status, None, response_ms,
+                                            user_id=user_id, candidates_tried=len(attempts),
+                                            credits_used=credits_used)
                 return FindResult(email=candidate, status="verified", catch_all=False,
                                   candidates_tried=len(attempts),
                                   attempts=attempts if return_attempts else [],
                                   mail_provider=mail_provider,
                                   credits_used=credits_used)
             if status == "catch_all":
+                if self.metrics is not None:
+                    self.metrics.log_result(provider, candidate, status, None, response_ms,
+                                            user_id=user_id, candidates_tried=len(attempts),
+                                            credits_used=credits_used)
                 return FindResult(email=candidates[0] if candidates else None,
                                   status="catch_all", catch_all=True,
                                   candidates_tried=len(attempts),
                                   attempts=attempts if return_attempts else [],
                                   mail_provider=mail_provider,
                                   credits_used=credits_used)
+            if self.metrics is not None:
+                self.metrics.log_result(provider, candidate, status, None, response_ms,
+                                        user_id=user_id, candidates_tried=len(attempts),
+                                        credits_used=credits_used)
 
         return FindResult(email=None, status="not_found", catch_all=False,
                           candidates_tried=len(attempts),

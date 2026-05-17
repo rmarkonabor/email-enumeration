@@ -66,6 +66,7 @@ export default function NavBar() {
   const navLinks = [
     { href: "/", label: "Single" },
     { href: "/batch", label: "Batch" },
+    { href: "/dashboard", label: "Dashboard" },
     { href: "/history", label: "History" },
     { href: "/settings", label: "Settings" },
     ...(isAdmin ? [{ href: "/admin", label: "Admin" }] : []),

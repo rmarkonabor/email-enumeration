@@ -676,6 +676,27 @@ async def cancel_job(job_id: str, ctx: UserContext = Depends(require_api_key)) -
     return {"cancelled": True}
 
 
+RANGE_SECONDS: dict[str, int | None] = {
+    "today":  86400,
+    "7d":     7  * 86400,
+    "30d":    30 * 86400,
+    "90d":    90 * 86400,
+    "all":    None,
+}
+
+@app.get("/stats", summary="Dashboard analytics for the authenticated user")
+async def user_stats(
+    range: str = "7d",
+    ctx: UserContext = Depends(require_api_key),
+) -> dict:
+    if range not in RANGE_SECONDS:
+        raise HTTPException(400, f"range must be one of: {', '.join(RANGE_SECONDS)}")
+    if not ctx.user_id:
+        raise HTTPException(403, "User ID not available")
+    metrics: Metrics = app.state.metrics
+    return metrics.user_stats(ctx.user_id, RANGE_SECONDS[range])
+
+
 # Module-level frozen sets so the handlers don't reimport per call
 from .jobs import ACTIVE_STATUSES, TERMINAL_STATUSES
 ACTIVE_STATUSES_SET = frozenset(ACTIVE_STATUSES)

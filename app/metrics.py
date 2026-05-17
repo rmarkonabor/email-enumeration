@@ -182,17 +182,20 @@ def _migrate_db(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_verification_log(conn: sqlite3.Connection) -> None:
-    """Add user_id column to verification_log on existing deployments."""
+    """Add columns to verification_log on existing deployments."""
     tbl = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='verification_log'"
     ).fetchone()
     if not tbl:
-        return  # Fresh install — SCHEMA creates it with user_id already
+        return  # Fresh install — SCHEMA creates it fully
     cols = {row[1] for row in conn.execute("PRAGMA table_info(verification_log)").fetchall()}
-    if "user_id" in cols:
-        return
-    conn.execute("ALTER TABLE verification_log ADD COLUMN user_id TEXT")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_vl_user ON verification_log (user_id)")
+    if "user_id" not in cols:
+        conn.execute("ALTER TABLE verification_log ADD COLUMN user_id TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_vl_user ON verification_log (user_id)")
+    if "candidates_tried" not in cols:
+        conn.execute("ALTER TABLE verification_log ADD COLUMN candidates_tried INTEGER NOT NULL DEFAULT 0")
+    if "credits_used" not in cols:
+        conn.execute("ALTER TABLE verification_log ADD COLUMN credits_used INTEGER NOT NULL DEFAULT 0")
     conn.commit()
 
 
@@ -249,14 +252,18 @@ class Metrics:
         smtp_code: int | None = None,
         response_ms: int | None = None,
         user_id: str | None = None,
+        candidates_tried: int = 0,
+        credits_used: int = 0,
     ) -> None:
         soft = 1 if (smtp_code in SOFT_BLOCK_CODES) else 0
         with self._conn() as conn:
             conn.execute(
                 "INSERT INTO verification_log "
-                "(ts, method, email, status, smtp_code, response_ms, soft_block, user_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (int(time.time()), method, email, status, smtp_code, response_ms, soft, user_id),
+                "(ts, method, email, status, smtp_code, response_ms, soft_block, user_id, "
+                " candidates_tried, credits_used) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (int(time.time()), method, email, status, smtp_code, response_ms, soft, user_id,
+                 candidates_tried, credits_used),
             )
             conn.commit()
 
@@ -354,6 +361,72 @@ class Metrics:
             }
             for ts, method, email, status, smtp_code, response_ms in rows
         ]
+
+    def user_stats(self, user_id: str, range_seconds: int | None) -> dict:
+        """Aggregate dashboard stats for a user over the given time window.
+        range_seconds=None means all time."""
+        cutoff = int(time.time()) - range_seconds if range_seconds else 0
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                  COUNT(*) AS total,
+                  SUM(CASE WHEN status='verified'  THEN 1 ELSE 0 END) AS verified,
+                  SUM(CASE WHEN status='catch_all' THEN 1 ELSE 0 END) AS catch_all,
+                  SUM(CASE WHEN status='not_found' THEN 1 ELSE 0 END) AS not_found,
+                  SUM(CASE WHEN status NOT IN ('verified','catch_all','not_found') THEN 1 ELSE 0 END) AS other,
+                  SUM(candidates_tried) AS total_enumerations,
+                  SUM(credits_used) AS total_credits,
+                  SUM(CASE WHEN status='verified' THEN candidates_tried ELSE 0 END) AS enum_verified_sum,
+                  COUNT(CASE WHEN status='verified' THEN 1 END) AS verified_count2
+                FROM verification_log
+                WHERE user_id = ? AND ts >= ?
+                """,
+                (user_id, cutoff),
+            ).fetchone()
+            total, verified, catch_all, not_found, other, total_enum, total_credits, \
+                enum_verified_sum, verified_count2 = row
+
+            total = total or 0
+            verified = verified or 0
+            catch_all = catch_all or 0
+            not_found = not_found or 0
+            other = other or 0
+            total_enum = total_enum or 0
+            total_credits = total_credits or 0
+            avg_enum = round(enum_verified_sum / verified_count2, 2) if verified_count2 else 0
+
+            # Daily breakdown — group by UTC date
+            daily_rows = conn.execute(
+                """
+                SELECT
+                  date(ts, 'unixepoch') AS day,
+                  COUNT(*) AS total,
+                  SUM(CASE WHEN status='verified' THEN 1 ELSE 0 END) AS verified,
+                  SUM(candidates_tried) AS enumerations,
+                  SUM(credits_used) AS credits
+                FROM verification_log
+                WHERE user_id = ? AND ts >= ?
+                GROUP BY day
+                ORDER BY day
+                """,
+                (user_id, cutoff),
+            ).fetchall()
+
+        return {
+            "total": total,
+            "verified": verified,
+            "catch_all": catch_all,
+            "not_found": not_found,
+            "other": other,
+            "total_enumerations": total_enum,
+            "total_credits": total_credits,
+            "avg_enumerations_per_verified": avg_enum,
+            "daily": [
+                {"date": d, "total": t, "verified": v, "enumerations": e, "credits": c}
+                for d, t, v, e, c in daily_rows
+            ],
+        }
 
     def delete_user_data(self, user_id: str) -> int:
         """Delete all verification_log rows for a user. Returns rows deleted."""
