@@ -123,7 +123,8 @@ export default function SinglePage() {
         }
       } catch (e: unknown) {
         if ((e as Error).name === "AbortError") return;
-        setError("Connection failed. Check your API Base URL and API Key in Settings.");
+        const msg = e instanceof Error ? e.message : "";
+        setError(msg || "Connection failed. Check your API Base URL and API Key in Settings.");
         setLoading(false);
       }
     })();
