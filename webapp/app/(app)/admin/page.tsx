@@ -241,15 +241,16 @@ export default function AdminSystemPage() {
               </thead>
               <tbody>
                 {warmup.schedule.map((step, i) => {
-                  const from = i === 0 ? 1 : warmup.schedule[i - 1].days_upper_excl + 1;
-                  const to = step.days_upper_excl;
-                  const isCurrent = warmup.schedule[i - 1]
-                    ? warmup.schedule[i - 1].days_upper_excl < warmup.days_to_max && to >= warmup.days_to_max
-                    : warmup.days_to_max <= to;
+                  const from = i === 0 ? 0 : warmup.schedule[i - 1].days_upper_excl;
+                  const isLast = i === warmup.schedule.length - 1;
+                  const label = isLast ? `Day ${from}+` : `Day ${from}–${step.days_upper_excl - 1}`;
+                  const isCurrent = warmup.per_ip.some(ip =>
+                    ip.day_in_warmup >= from && (isLast || ip.day_in_warmup < step.days_upper_excl)
+                  );
                   return (
                     <tr key={i} className={`border-t border-slate-100 ${isCurrent ? "bg-blue-50" : ""}`}>
                       <td className="px-3 py-2 text-slate-600">
-                        Day {from}–{to}
+                        {label}
                         {isCurrent && <span className="ml-2 text-xs text-blue-600">← current</span>}
                       </td>
                       <td className="px-3 py-2 font-medium">{step.cap.toLocaleString()}</td>
