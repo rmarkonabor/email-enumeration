@@ -80,6 +80,7 @@ export default function BatchPage() {
   const jobsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadJobs = useCallback(async () => {
+    if (jobsTimerRef.current) { clearTimeout(jobsTimerRef.current); jobsTimerRef.current = null; }
     const apiKey = localStorage.getItem("ef_api_key") || "";
     try {
       const r = await fetch(`${API_BASE}/jobs`, { headers: { "X-API-Key": apiKey } });
@@ -96,9 +97,14 @@ export default function BatchPage() {
   }, []);
 
   useEffect(() => {
-    if (!jobsOpen) return;
+    if (!jobsOpen) {
+      // Clear timer and reset highlight when panel is closed
+      if (jobsTimerRef.current) { clearTimeout(jobsTimerRef.current); jobsTimerRef.current = null; }
+      setHighlightedJobId(null);
+      return;
+    }
     loadJobs();
-    return () => { if (jobsTimerRef.current) clearTimeout(jobsTimerRef.current); };
+    return () => { if (jobsTimerRef.current) { clearTimeout(jobsTimerRef.current); jobsTimerRef.current = null; } };
   }, [jobsOpen, loadJobs]);
 
   function updateRow(id: number, field: keyof FindRequest, value: string) {

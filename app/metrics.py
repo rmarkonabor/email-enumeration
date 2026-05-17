@@ -195,9 +195,11 @@ def _migrate_verification_log(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE verification_log ADD COLUMN user_id TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_vl_user ON verification_log (user_id)")
     if "candidates_tried" not in cols:
-        conn.execute("ALTER TABLE verification_log ADD COLUMN candidates_tried INTEGER NOT NULL DEFAULT 0")
+        # SQLite ALTER TABLE ADD COLUMN cannot enforce NOT NULL without a default,
+        # but DEFAULT 0 makes all existing rows 0 which is correct.
+        conn.execute("ALTER TABLE verification_log ADD COLUMN candidates_tried INTEGER DEFAULT 0")
     if "credits_used" not in cols:
-        conn.execute("ALTER TABLE verification_log ADD COLUMN credits_used INTEGER NOT NULL DEFAULT 0")
+        conn.execute("ALTER TABLE verification_log ADD COLUMN credits_used INTEGER DEFAULT 0")
     conn.commit()
 
 
@@ -377,9 +379,9 @@ class Metrics:
                   SUM(CASE WHEN status='catch_all' THEN 1 ELSE 0 END) AS catch_all,
                   SUM(CASE WHEN status='not_found' THEN 1 ELSE 0 END) AS not_found,
                   SUM(CASE WHEN status NOT IN ('verified','catch_all','not_found') THEN 1 ELSE 0 END) AS other,
-                  SUM(candidates_tried) AS total_enumerations,
-                  SUM(credits_used) AS total_credits,
-                  SUM(CASE WHEN status='verified' THEN candidates_tried ELSE 0 END) AS enum_verified_sum,
+                  SUM(COALESCE(candidates_tried, 0)) AS total_enumerations,
+                  SUM(COALESCE(credits_used, 0)) AS total_credits,
+                  SUM(CASE WHEN status='verified' THEN COALESCE(candidates_tried, 0) ELSE 0 END) AS enum_verified_sum,
                   COUNT(CASE WHEN status='verified' THEN 1 END) AS verified_count2
                 FROM verification_log
                 WHERE user_id = ? AND ts >= ?
@@ -405,8 +407,8 @@ class Metrics:
                   date(ts, 'unixepoch') AS day,
                   COUNT(*) AS total,
                   SUM(CASE WHEN status='verified' THEN 1 ELSE 0 END) AS verified,
-                  SUM(candidates_tried) AS enumerations,
-                  SUM(credits_used) AS credits
+                  SUM(COALESCE(candidates_tried, 0)) AS enumerations,
+                  SUM(COALESCE(credits_used, 0)) AS credits
                 FROM verification_log
                 WHERE user_id = ? AND ts >= ?
                 GROUP BY day

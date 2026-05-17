@@ -59,7 +59,8 @@ function MetricCard({
 }
 
 function BarChart({ daily, range }: { daily: DailyRow[]; range: Range }) {
-  if (range === "today" || daily.length < 2) return null;
+  if (daily.length === 0) return null;
+  if (range === "today" && daily.length < 2) return null;
 
   const maxTotal = Math.max(...daily.map(d => d.total), 1);
 

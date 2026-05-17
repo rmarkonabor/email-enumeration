@@ -281,11 +281,11 @@ async def health() -> dict:
 
 
 @app.get(
-    "/stats",
+    "/smtp/stats",
     dependencies=[Depends(require_api_key)],
     summary="SMTP warm-up status, today's volume, and feedback-based accuracy",
 )
-async def stats() -> dict:
+async def smtp_stats() -> dict:
     metrics: Metrics = app.state.metrics
     warmup: Warmup = app.state.warmup
     return {

@@ -16,12 +16,19 @@ export default function ProviderPicker() {
   const [keys, setKeys] = useState<Record<string, boolean>>({});
   const supabase = createClient();
 
-  useEffect(() => {
+  function readKeys() {
     setProvider((localStorage.getItem("ef_verify_provider") as Provider) || "smtp");
     setKeys({
       ef_zerobounce_key: !!localStorage.getItem("ef_zerobounce_key"),
       ef_reoon_key: !!localStorage.getItem("ef_reoon_key"),
     });
+  }
+
+  useEffect(() => {
+    readKeys();
+    // Re-read when another tab or the Settings page writes to localStorage
+    window.addEventListener("storage", readKeys);
+    return () => window.removeEventListener("storage", readKeys);
   }, []);
 
   async function switchProvider(p: Provider) {
@@ -48,6 +55,7 @@ export default function ProviderPicker() {
                 type="button"
                 onClick={() => hasKey && switchProvider(o.id)}
                 disabled={!hasKey}
+                tabIndex={hasKey ? 0 : -1}
                 className={`px-3 py-1.5 transition-colors border-l border-slate-200 first:border-l-0 ${
                   isFirst ? "rounded-l-lg" : ""
                 } ${isLast ? "rounded-r-lg" : ""} ${
