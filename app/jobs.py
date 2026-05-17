@@ -12,7 +12,7 @@ than discovering it mid-batch.
 Schema:
   batch_jobs(id, user_id, status, contacts JSON, total, done_count,
              results JSON, verify_provider, zerobounce_api_key, reoon_api_key,
-             created_at, started_at, completed_at, error, cancel_requested)
+             region, created_at, started_at, completed_at, error, cancel_requested)
 """
 from __future__ import annotations
 
@@ -233,19 +233,19 @@ class JobStore:
     def users_with_active_jobs(self, region: str | None = None) -> list[str]:
         """Distinct user_ids with at least one active job for this region,
         ordered by their oldest active job's creation time."""
-        r = region if region is not None else self.region
+        rgn = region if region is not None else self.region
         with self._conn() as conn:
             rows = conn.execute(
                 "SELECT user_id FROM batch_jobs "
                 "WHERE status IN ('queued','running') AND region = ? "
                 "GROUP BY user_id "
                 "ORDER BY MIN(created_at)",
-                (r,),
+                (rgn,),
             ).fetchall()
-        return [r["user_id"] for r in rows]
+        return [row["user_id"] for row in rows]
 
     def next_active_job_for_user(self, user_id: str, region: str | None = None) -> dict | None:
-        r = region if region is not None else self.region
+        rgn = region if region is not None else self.region
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT id, user_id, status, contacts, total, done_count, results, "
@@ -253,7 +253,7 @@ class JobStore:
                 "FROM batch_jobs "
                 "WHERE user_id = ? AND status IN ('queued','running') AND region = ? "
                 "ORDER BY created_at LIMIT 1",
-                (user_id, r),
+                (user_id, rgn),
             ).fetchone()
         return self._row_to_dict(row, include_secrets=True) if row else None
 
@@ -273,14 +273,14 @@ class JobStore:
         """Reset jobs stuck in 'running' for too long back to 'queued'.
         Scoped to this server's region so restarts on one server don't
         disturb another region's in-flight jobs."""
-        r = region if region is not None else self.region
+        rgn = region if region is not None else self.region
         cutoff = int(time.time()) - stale_after_seconds
         with self._conn() as conn:
             cur = conn.execute(
                 "UPDATE batch_jobs SET status = 'queued', started_at = NULL "
                 "WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ? "
                 "AND done_count < total AND region = ?",
-                (cutoff, r),
+                (cutoff, rgn),
             )
             conn.commit()
             return cur.rowcount
