@@ -1,15 +1,13 @@
 "use client";
 
-import { useState, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useRef, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { addHistory, generateRunId, type FindRequest, type FindResponse } from "@/lib/api";
 import StatusBadge from "@/components/StatusBadge";
 import ProviderPicker from "@/components/ProviderPicker";
 
-// Mirrors backend jobs.SYNC_THRESHOLD. Batches above this go to the background
-// job queue and return a job_id instead of streaming results inline.
 const SYNC_THRESHOLD = 25;
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "https://verify1.mailcheckhq.com";
 
 interface Row extends FindRequest {
   _id: number;
@@ -21,15 +19,34 @@ interface ResultRow {
   state: "pending" | "running" | "done";
 }
 
+type JobSummary = {
+  id: string;
+  status: "queued" | "running" | "done" | "failed" | "cancelled";
+  total: number;
+  done_count: number;
+  verify_provider: string;
+  created_at: string;
+  completed_at: string | null;
+  error: string | null;
+};
+
+const STATUS_BADGE: Record<JobSummary["status"], string> = {
+  queued: "bg-slate-100 text-slate-700",
+  running: "bg-blue-100 text-blue-800",
+  done: "bg-emerald-100 text-emerald-800",
+  failed: "bg-red-100 text-red-800",
+  cancelled: "bg-amber-100 text-amber-800",
+};
+
 let rowCounter = 0;
 function newRow(): Row {
   return { _id: ++rowCounter, first_name: "", last_name: "", domain: "", middle_name: "" };
 }
 
-function getConfig(): { baseUrl: string; apiKey: string; verifyProvider: string; zerobounceKey: string; reoonKey: string } {
+function getConfig() {
   if (typeof window === "undefined") return { baseUrl: "", apiKey: "", verifyProvider: "smtp", zerobounceKey: "", reoonKey: "" };
   return {
-    baseUrl: localStorage.getItem("ef_base_url") || "https://verify1.mailcheckhq.com",
+    baseUrl: localStorage.getItem("ef_base_url") || API_BASE,
     apiKey: localStorage.getItem("ef_api_key") || "",
     verifyProvider: localStorage.getItem("ef_verify_provider") || "smtp",
     zerobounceKey: localStorage.getItem("ef_zerobounce_key") || "",
@@ -53,8 +70,36 @@ export default function BatchPage() {
   const [eta, setEta] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const router = useRouter();
   const startTimeRef = useRef<number>(0);
+
+  // Jobs panel
+  const [jobsOpen, setJobsOpen] = useState(false);
+  const [jobs, setJobs] = useState<JobSummary[] | null>(null);
+  const [jobsErr, setJobsErr] = useState<string | null>(null);
+  const [highlightedJobId, setHighlightedJobId] = useState<string | null>(null);
+  const jobsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const loadJobs = useCallback(async () => {
+    const apiKey = localStorage.getItem("ef_api_key") || "";
+    try {
+      const r = await fetch(`${API_BASE}/jobs`, { headers: { "X-API-Key": apiKey } });
+      if (!r.ok) { setJobsErr(`HTTP ${r.status}`); return; }
+      const data = await r.json();
+      setJobs(data.jobs);
+      setJobsErr(null);
+      if (data.jobs.some((j: JobSummary) => j.status === "queued" || j.status === "running")) {
+        jobsTimerRef.current = setTimeout(loadJobs, 3000);
+      }
+    } catch (e: unknown) {
+      setJobsErr(e instanceof Error ? e.message : "Failed to load jobs");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!jobsOpen) return;
+    loadJobs();
+    return () => { if (jobsTimerRef.current) clearTimeout(jobsTimerRef.current); };
+  }, [jobsOpen, loadJobs]);
 
   function updateRow(id: number, field: keyof FindRequest, value: string) {
     setRows(rs => rs.map(r => r._id === id ? { ...r, [field]: value } : r));
@@ -110,6 +155,7 @@ export default function BatchPage() {
     setError(null);
     setProgress({ done: 0, total: valid.length });
     setEta(null);
+    setResults([]);
     startTimeRef.current = Date.now();
     const batchRunId = generateRunId();
 
@@ -120,17 +166,8 @@ export default function BatchPage() {
       domain: rest.domain.trim(),
     }));
 
-    const initialResults: ResultRow[] = contacts.map(req => ({
-      request: req,
-      response: {} as FindResponse,
-      state: "pending",
-    }));
-    setResults(initialResults);
-
     const { baseUrl, apiKey, verifyProvider, zerobounceKey, reoonKey } = getConfig();
 
-    // Large batches: enqueue as a background job and redirect to the job view.
-    // Small batches keep the existing inline-streaming behavior.
     if (contacts.length > SYNC_THRESHOLD) {
       try {
         const res = await fetch(`${baseUrl}/find/batch`, {
@@ -145,7 +182,11 @@ export default function BatchPage() {
         }
         const data = await res.json();
         setLoading(false);
-        router.push(`/jobs/${data.job_id}`);
+        setHighlightedJobId(data.job_id);
+        setJobsOpen(true);
+        // Trigger a fresh load so the new job appears immediately
+        if (jobsTimerRef.current) clearTimeout(jobsTimerRef.current);
+        loadJobs();
         return;
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : "Failed to enqueue batch");
@@ -153,6 +194,13 @@ export default function BatchPage() {
         return;
       }
     }
+
+    const initialResults: ResultRow[] = contacts.map(req => ({
+      request: req,
+      response: {} as FindResponse,
+      state: "pending",
+    }));
+    setResults(initialResults);
 
     localStorage.setItem("ef_active_batch", JSON.stringify({
       done: 0, total: valid.length, startedAt: startTimeRef.current,
@@ -199,14 +247,10 @@ export default function BatchPage() {
               mail_provider: event.mail_provider ?? null,
               credits_used: event.credits_used ?? 0,
             };
-            setResults(prev => {
-              const updated = prev.map((r, i) =>
-                i === event.index ? { ...r, response, state: "done" as const } : r
-              );
-              return updated;
-            });
+            setResults(prev => prev.map((r, i) =>
+              i === event.index ? { ...r, response, state: "done" as const } : r
+            ));
             addHistory(contacts[event.index], response, batchRunId, "batch", verifyProvider);
-
             setProgress(p => {
               const done = p.done + 1;
               const elapsed = (Date.now() - startTimeRef.current) / 1000;
@@ -249,19 +293,22 @@ export default function BatchPage() {
   const validCount = rows.filter(r => r.first_name && r.last_name && r.domain).length;
   const doneResults = results.filter(r => r.state === "done");
   const totalCredits = doneResults.reduce((sum, r) => sum + (r.response.credits_used ?? 0), 0);
+  const activeJobCount = jobs?.filter(j => j.status === "queued" || j.status === "running").length ?? 0;
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-1">
-        <h1 className="text-2xl font-bold text-slate-900">Batch / CSV lookup</h1>
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Batch / CSV lookup</h1>
+          <p className="text-slate-400 text-sm mt-0.5">
+            Up to {SYNC_THRESHOLD} contacts run live; larger batches are queued as background jobs below.
+          </p>
+        </div>
         <ProviderPicker />
       </div>
-      <p className="text-slate-400 text-sm mb-6">
-        Upload a CSV or add rows manually. Up to {SYNC_THRESHOLD} contacts run live;
-        larger batches are queued as background <Link href="/jobs" className="text-blue-600 hover:underline">jobs</Link> that survive page reloads.
-      </p>
 
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-6">
+      {/* Input card */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
         <div className="flex items-center gap-3 mb-5">
           <button onClick={() => fileRef.current?.click()} className="px-4 py-2 border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors">
             Upload CSV
@@ -323,19 +370,16 @@ export default function BatchPage() {
         )}
       </div>
 
+      {/* Live results (small batches only) */}
       {results.length > 0 && (
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-4">
               <h2 className="font-semibold text-slate-900">
                 Results{" "}
-                <span className="text-slate-400 font-normal text-sm">
-                  ({progress.done}/{progress.total})
-                </span>
+                <span className="text-slate-400 font-normal text-sm">({progress.done}/{progress.total})</span>
               </h2>
-              {loading && eta && (
-                <span className="text-xs text-slate-400">~{eta} remaining</span>
-              )}
+              {loading && eta && <span className="text-xs text-slate-400">~{eta} remaining</span>}
               {totalCredits > 0 && (
                 <span className="text-xs px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-100 font-medium">
                   {totalCredits} API credit{totalCredits !== 1 ? "s" : ""} used
@@ -393,15 +437,9 @@ export default function BatchPage() {
                     <td className="py-2.5 pr-4">
                       {state === "done" ? <StatusBadge status={r.status} /> : <span className="text-slate-300">—</span>}
                     </td>
-                    <td className="py-2.5 pr-4 text-slate-500 text-xs">
-                      {state === "done" ? (r.mail_provider ?? "—") : "—"}
-                    </td>
-                    <td className="py-2.5 pr-4 text-slate-500 text-xs">
-                      {state === "done" ? (r.credits_used ?? 0) : "—"}
-                    </td>
-                    <td className="py-2.5 text-slate-500">
-                      {state === "done" ? (r.fallback_recommended ? "Yes" : "No") : "—"}
-                    </td>
+                    <td className="py-2.5 pr-4 text-slate-500 text-xs">{state === "done" ? (r.mail_provider ?? "—") : "—"}</td>
+                    <td className="py-2.5 pr-4 text-slate-500 text-xs">{state === "done" ? (r.credits_used ?? 0) : "—"}</td>
+                    <td className="py-2.5 text-slate-500">{state === "done" ? (r.fallback_recommended ? "Yes" : "No") : "—"}</td>
                   </tr>
                 ))}
               </tbody>
@@ -409,6 +447,101 @@ export default function BatchPage() {
           </div>
         </div>
       )}
+
+      {/* Background jobs expandable card */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <button
+          onClick={() => setJobsOpen(o => !o)}
+          className="w-full flex items-center justify-between px-6 py-4 hover:bg-slate-50 transition-colors text-left"
+        >
+          <div className="flex items-center gap-3">
+            <span className="font-semibold text-slate-900 text-sm">Background jobs</span>
+            {activeJobCount > 0 && (
+              <span className="flex items-center gap-1.5 text-xs font-medium text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full">
+                <span className="relative flex h-1.5 w-1.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500" />
+                </span>
+                {activeJobCount} active
+              </span>
+            )}
+            {jobs && jobs.length > 0 && activeJobCount === 0 && (
+              <span className="text-xs text-slate-400">{jobs.length} job{jobs.length !== 1 ? "s" : ""}</span>
+            )}
+          </div>
+          <svg
+            className={`w-4 h-4 text-slate-400 transition-transform ${jobsOpen ? "rotate-180" : ""}`}
+            fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+
+        {jobsOpen && (
+          <div className="border-t border-slate-100">
+            {jobsErr ? (
+              <div className="text-red-600 text-sm px-6 py-4">Error: {jobsErr}</div>
+            ) : !jobs ? (
+              <div className="text-slate-400 text-sm px-6 py-4">Loading…</div>
+            ) : jobs.length === 0 ? (
+              <div className="text-sm text-slate-400 px-6 py-4 text-center">
+                No background jobs yet. Batches over {SYNC_THRESHOLD} contacts are queued here automatically.
+              </div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+                  <tr>
+                    <th className="text-left px-6 py-2 font-medium">Job</th>
+                    <th className="text-left px-3 py-2 font-medium">Status</th>
+                    <th className="text-left px-3 py-2 font-medium">Progress</th>
+                    <th className="text-left px-3 py-2 font-medium">Provider</th>
+                    <th className="text-left px-3 py-2 font-medium">Created</th>
+                    <th className="text-left px-3 py-2 font-medium">Completed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {jobs.map(j => {
+                    const pct = j.total > 0 ? Math.round((j.done_count / j.total) * 100) : 0;
+                    const isNew = j.id === highlightedJobId;
+                    return (
+                      <tr key={j.id} className={`border-t border-slate-100 ${isNew ? "bg-blue-50/50" : ""}`}>
+                        <td className="px-6 py-2">
+                          <Link href={`/jobs/${j.id}`} className="text-blue-600 hover:underline font-mono text-xs">
+                            {j.id.slice(0, 8)}…
+                          </Link>
+                        </td>
+                        <td className="px-3 py-2">
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded ${STATUS_BADGE[j.status]}`}>
+                            {j.status}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 min-w-36">
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                              <div
+                                className={`h-full ${j.status === "done" ? "bg-emerald-500" : j.status === "running" ? "bg-blue-500" : "bg-slate-300"}`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                            <span className="text-xs text-slate-500 tabular-nums w-16 text-right">
+                              {j.done_count}/{j.total}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2 text-slate-600 text-xs">{j.verify_provider}</td>
+                        <td className="px-3 py-2 text-xs text-slate-500">{new Date(j.created_at).toLocaleString()}</td>
+                        <td className="px-3 py-2 text-xs text-slate-500">
+                          {j.completed_at ? new Date(j.completed_at).toLocaleString() : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
