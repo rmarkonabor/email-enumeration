@@ -7,6 +7,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "https://verify1.mailcheckh
 
 type AdminUser = {
   id: string;
+  email: string;
   api_key_preview: string;
   is_admin: boolean;
   disabled: boolean;
@@ -37,14 +38,18 @@ export default function AdminUsersPage() {
   }
 
   async function toggleDisabled(u: AdminUser) {
-    if (!confirm(`${u.disabled ? "Re-enable" : "Disable"} user ${u.id.slice(0,8)}…?`)) return;
+    if (!confirm(`${u.disabled ? "Re-enable" : "Disable"} user ${u.email || u.id.slice(0,8)}…?`)) return;
     setBusyId(u.id);
     const key = localStorage.getItem("ef_api_key") || "";
-    await fetch(`${API_BASE}/admin/users/${u.id}/disable`, {
+    const r = await fetch(`${API_BASE}/admin/users/${u.id}/disable`, {
       method: "POST",
       headers: { "X-API-Key": key, "Content-Type": "application/json" },
       body: JSON.stringify({ disabled: !u.disabled }),
     });
+    if (!r.ok) {
+      const body = await r.text();
+      alert(`Failed: ${body}`);
+    }
     setBusyId(null);
     load();
   }
@@ -91,6 +96,7 @@ export default function AdminUsersPage() {
         <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
           <tr>
             <th className="text-left px-3 py-2 font-medium">User</th>
+            <th className="text-left px-3 py-2 font-medium">Email</th>
             <th className="text-left px-3 py-2 font-medium">API key</th>
             <th className="text-left px-3 py-2 font-medium">24h</th>
             <th className="text-left px-3 py-2 font-medium">7d</th>
@@ -102,7 +108,7 @@ export default function AdminUsersPage() {
         </thead>
         <tbody>
           {users.length === 0 && (
-            <tr><td colSpan={8} className="px-3 py-6 text-center text-slate-400">No users yet</td></tr>
+            <tr><td colSpan={9} className="px-3 py-6 text-center text-slate-400">No users yet</td></tr>
           )}
           {users.map(u => (
             <tr key={u.id} className="border-t border-slate-100">
@@ -112,6 +118,7 @@ export default function AdminUsersPage() {
                 </Link>
                 {u.is_admin && <span className="ml-2 text-xs bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">admin</span>}
               </td>
+              <td className="px-3 py-2 text-xs text-slate-700">{u.email || <span className="text-slate-400">—</span>}</td>
               <td className="px-3 py-2 font-mono text-xs text-slate-500">{u.api_key_preview}</td>
               <td className="px-3 py-2">{u.lookups_24h}</td>
               <td className="px-3 py-2">{u.lookups_7d}</td>

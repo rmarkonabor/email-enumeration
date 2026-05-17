@@ -110,9 +110,13 @@ export default function AdminSystemPage() {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Stat label="Today's attempts" value={warmup.attempts.toLocaleString()} />
-        <Stat label="Pool capacity" value={`${warmup.remaining.toLocaleString()} / ${warmup.cap.toLocaleString()}`} />
+        <Stat
+          label="Pool capacity"
+          value={warmup.paused ? "Paused" : `${warmup.remaining.toLocaleString()} / ${warmup.cap.toLocaleString()}`}
+          warn={warmup.paused}
+        />
+        <Stat label="Per-domain cap" value={warmup.per_domain_cap.toLocaleString()} />
         <Stat label="Soft-block rate" value={`${warmup.soft_block_pct}%`} />
-        <Stat label="24h volume" value={volume_24h.total.toLocaleString()} />
       </div>
 
       <div>
@@ -223,6 +227,40 @@ export default function AdminSystemPage() {
           </div>
         </div>
       </div>
+
+      {warmup.schedule.length > 0 && (
+        <div>
+          <h2 className="text-sm font-semibold text-slate-900 mb-2">Warmup schedule</h2>
+          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+                <tr>
+                  <th className="text-left px-3 py-2 font-medium">Days</th>
+                  <th className="text-left px-3 py-2 font-medium">Daily cap / IP</th>
+                </tr>
+              </thead>
+              <tbody>
+                {warmup.schedule.map((step, i) => {
+                  const from = i === 0 ? 1 : warmup.schedule[i - 1].days_upper_excl + 1;
+                  const to = step.days_upper_excl;
+                  const isCurrent = warmup.schedule[i - 1]
+                    ? warmup.schedule[i - 1].days_upper_excl < warmup.days_to_max && to >= warmup.days_to_max
+                    : warmup.days_to_max <= to;
+                  return (
+                    <tr key={i} className={`border-t border-slate-100 ${isCurrent ? "bg-blue-50" : ""}`}>
+                      <td className="px-3 py-2 text-slate-600">
+                        Day {from}–{to}
+                        {isCurrent && <span className="ml-2 text-xs text-blue-600">← current</span>}
+                      </td>
+                      <td className="px-3 py-2 font-medium">{step.cap.toLocaleString()}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -295,11 +333,11 @@ function ServerHealthCard({ s }: { s: ServerEntry }) {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-4">
+    <div className={`bg-white border rounded-xl p-4 ${warn ? "border-amber-300" : "border-slate-200"}`}>
       <div className="text-xs text-slate-500">{label}</div>
-      <div className="text-lg font-semibold text-slate-900 mt-0.5">{value}</div>
+      <div className={`text-lg font-semibold mt-0.5 ${warn ? "text-amber-600" : "text-slate-900"}`}>{value}</div>
     </div>
   );
 }

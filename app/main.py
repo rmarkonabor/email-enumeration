@@ -768,14 +768,37 @@ async def _supabase_request(method: str, path: str, **kwargs) -> _httpx.Response
     summary="List users with activity counts (admin only)",
 )
 async def admin_list_users(ctx: UserContext = Depends(require_admin)) -> dict:
-    r = await _supabase_request(
-        "GET",
-        "/profiles",
-        params={"select": "id,api_key,is_admin,disabled,created_at", "order": "created_at.desc"},
+    async def _fetch_emails() -> dict[str, str]:
+        if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+            return {}
+        try:
+            async with _httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(
+                    f"{SUPABASE_URL}/auth/v1/admin/users",
+                    params={"per_page": 1000, "page": 1},
+                    headers={
+                        "apikey": SUPABASE_SERVICE_KEY,
+                        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                    },
+                )
+                if r.status_code == 200:
+                    return {u["id"]: u.get("email", "") for u in r.json().get("users", [])}
+        except Exception:
+            pass
+        return {}
+
+    profiles_r, email_map = await asyncio.gather(
+        _supabase_request(
+            "GET",
+            "/profiles",
+            params={"select": "id,api_key,is_admin,disabled,created_at", "order": "created_at.desc"},
+        ),
+        _fetch_emails(),
     )
-    if r.status_code != 200:
-        raise HTTPException(502, f"Supabase error: {r.status_code}")
-    profiles = r.json()
+
+    if profiles_r.status_code != 200:
+        raise HTTPException(502, f"Supabase error: {profiles_r.status_code}")
+    profiles = profiles_r.json()
 
     metrics: Metrics = app.state.metrics
     activity = {row["user_id"]: row for row in metrics.user_activity_summary()}
@@ -786,6 +809,7 @@ async def admin_list_users(ctx: UserContext = Depends(require_admin)) -> dict:
         api_key = p.get("api_key") or ""
         users.append({
             "id": p["id"],
+            "email": email_map.get(p["id"], ""),
             "api_key_preview": (api_key[:6] + "..." + api_key[-4:]) if len(api_key) > 10 else api_key,
             "is_admin": bool(p.get("is_admin")),
             "disabled": bool(p.get("disabled")),
