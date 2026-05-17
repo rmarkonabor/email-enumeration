@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
-ADMIN_API_KEY = os.getenv("API_KEY", "")
+ADMIN_API_KEY = os.getenv("API_KEY", "")  # same env var as API_KEY; see .env.example
 
 _CACHE_TTL = 300
 

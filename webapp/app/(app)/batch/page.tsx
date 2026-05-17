@@ -86,9 +86,10 @@ export default function BatchPage() {
       const r = await fetch(`${API_BASE}/jobs`, { headers: { "X-API-Key": apiKey } });
       if (!r.ok) { setJobsErr(`HTTP ${r.status}`); return; }
       const data = await r.json();
-      setJobs(data.jobs);
+      const jobs: JobSummary[] = Array.isArray(data.jobs) ? data.jobs : [];
+      setJobs(jobs);
       setJobsErr(null);
-      if (data.jobs.some((j: JobSummary) => j.status === "queued" || j.status === "running")) {
+      if (jobs.some((j: JobSummary) => j.status === "queued" || j.status === "running")) {
         jobsTimerRef.current = setTimeout(loadJobs, 3000);
       }
     } catch (e: unknown) {
