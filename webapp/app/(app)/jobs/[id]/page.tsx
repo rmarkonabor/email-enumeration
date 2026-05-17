@@ -4,6 +4,30 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import StatusBadge from "@/components/StatusBadge";
+import { addHistory, generateRunId } from "@/lib/api";
+
+const HISTORY_SYNCED_KEY = "ef_job_history_synced";
+
+function alreadySynced(jobId: string): boolean {
+  try {
+    const raw = localStorage.getItem(HISTORY_SYNCED_KEY);
+    if (!raw) return false;
+    const set = JSON.parse(raw) as string[];
+    return set.includes(jobId);
+  } catch { return false; }
+}
+
+function markSynced(jobId: string): void {
+  try {
+    const raw = localStorage.getItem(HISTORY_SYNCED_KEY);
+    const set: string[] = raw ? JSON.parse(raw) : [];
+    if (!set.includes(jobId)) {
+      set.push(jobId);
+      // Cap at 500 to avoid unbounded growth
+      localStorage.setItem(HISTORY_SYNCED_KEY, JSON.stringify(set.slice(-500)));
+    }
+  } catch { /* ignore */ }
+}
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "https://verify1.mailcheckhq.com";
 
@@ -67,6 +91,40 @@ export default function JobDetailPage() {
         setErr(null);
         if (data.status === "queued" || data.status === "running") {
           timer = setTimeout(load, 1500);
+        } else if (
+          (data.status === "done" || data.status === "cancelled" || data.status === "failed")
+          && data.results.length > 0
+          && !alreadySynced(data.id)
+        ) {
+          // Fold completed job results into local history so they show up in
+          // /history alongside synchronously-run batches.
+          const runId = generateRunId();
+          for (const r of data.results) {
+            addHistory(
+              {
+                first_name: r.request.first_name,
+                last_name: r.request.last_name,
+                domain: r.request.domain,
+                middle_name: r.request.middle_name ?? "",
+              },
+              {
+                email: r.email,
+                status: (["verified", "catch_all", "not_found", "error"].includes(r.status)
+                          ? r.status
+                          : "error") as "verified" | "catch_all" | "not_found" | "error",
+                catch_all: r.catch_all,
+                candidates_tried: r.candidates_tried,
+                mail_provider: r.mail_provider,
+                credits_used: r.credits_used,
+                fallback_recommended: r.status === "catch_all" || r.status === "not_found" || r.status === "throttled",
+                message: r.error ?? null,
+              },
+              runId,
+              "batch",
+              data.verify_provider,
+            );
+          }
+          markSynced(data.id);
         }
       } catch (e: unknown) {
         if (!cancelled) setErr(e instanceof Error ? e.message : "Failed to load job");

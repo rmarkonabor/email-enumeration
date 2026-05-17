@@ -253,7 +253,7 @@ class FeedbackRequest(BaseModel):
 
 
 class BatchRequest(BaseModel):
-    contacts: list[FindRequest] = Field(..., max_length=MAX_BATCH_SIZE)
+    contacts: list[FindRequest] = Field(..., min_length=1, max_length=MAX_BATCH_SIZE)
     verify_provider: str = Field(default="smtp")
     zerobounce_api_key: str = Field(default="")
     reoon_api_key: str = Field(default="")

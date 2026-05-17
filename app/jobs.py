@@ -122,7 +122,13 @@ class JobStore:
             conn.commit()
 
     def append_result(self, job_id: str, result: dict) -> None:
-        """Append a per-contact result and increment done_count atomically."""
+        """Append a per-contact result and increment done_count.
+
+        NOT thread/process safe under concurrent writers — relies on the single-
+        worker invariant. If you ever run multiple workers, replace with a
+        per-contact row table or use an explicit UPDATE...WHERE done_count = ?
+        compare-and-swap.
+        """
         with self._conn() as conn:
             row = conn.execute(
                 "SELECT results, done_count FROM batch_jobs WHERE id = ?", (job_id,)
@@ -358,6 +364,9 @@ class JobWorker:
         self._rotation: deque[str] = deque()
         self._task: asyncio.Task | None = None
         self._stopping = False
+        # Counts consecutive ticks where every active user was SMTP+blocked.
+        # When it exceeds the rotation size we sleep instead of CPU-spinning.
+        self._consecutive_skips = 0
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -398,26 +407,42 @@ class JobWorker:
         user_id = self._next_user()
         if user_id is None:
             await asyncio.sleep(self.idle_sleep)
+            self._consecutive_skips = 0
             return
 
         job = self.store.next_active_job_for_user(user_id)
         if not job:
+            self._consecutive_skips = 0
             return  # User's jobs all completed between rotation snapshot and now
 
         if self.store.apply_cancel_if_requested(job["id"]):
+            self._consecutive_skips = 0
             return  # Cancelled; do nothing else
+
+        # Guard against an over-counted job (e.g., reset-on-startup leftovers).
+        if job["done_count"] >= job["total"]:
+            self.store.mark_done(job["id"])
+            self._consecutive_skips = 0
+            return
 
         if job["status"] == "queued":
             self.store.mark_running(job["id"])
 
+        # SMTP pool exhausted: defer this user but DON'T sleep all jobs — a
+        # different user might have a zerobounce/reoon job that's unaffected.
         if (job["verify_provider"] == "smtp"
                 and self.warmup is not None
                 and self.warmup.is_pool_exhausted()):
-            # Re-enqueue this user at the back; let other providers/users go.
             self._rotation.append(user_id)
-            await asyncio.sleep(self.pool_exhausted_sleep)
+            self._consecutive_skips += 1
+            # If we've cycled through every active user and they're all blocked,
+            # then sleep — no point spinning DB queries every few ms.
+            if self._consecutive_skips >= max(1, len(self._rotation) + 1):
+                await asyncio.sleep(self.pool_exhausted_sleep)
+                self._consecutive_skips = 0
             return
 
+        self._consecutive_skips = 0
         contact = job["contacts"][job["done_count"]]
         try:
             result = await self.finder.find(
