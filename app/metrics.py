@@ -323,6 +323,17 @@ class Metrics:
                 })
         return out
 
+    def user_lookups_today(self, user_id: str) -> int:
+        """Count of verification_log rows for this user in the last 24h.
+        Used by the job queue for per-user daily quota enforcement."""
+        cutoff = int(time.time()) - 86400
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM verification_log WHERE user_id = ? AND ts > ?",
+                (user_id, cutoff),
+            ).fetchone()
+        return int(row[0])
+
     def user_recent_log(self, user_id: str, limit: int = 50) -> list[dict]:
         """Last N verification log entries for a specific user (newest first)."""
         with self._conn() as conn:
