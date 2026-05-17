@@ -471,9 +471,6 @@ export default function BatchPage() {
                 {activeJobCount} active
               </span>
             )}
-            {jobs && jobs.length > 0 && activeJobCount === 0 && (
-              <span className="text-xs text-slate-400">{jobs.length} job{jobs.length !== 1 ? "s" : ""}</span>
-            )}
           </div>
           <svg
             className={`w-4 h-4 text-slate-400 transition-transform ${jobsOpen ? "rotate-180" : ""}`}
@@ -489,9 +486,11 @@ export default function BatchPage() {
               <div className="text-red-600 text-sm px-6 py-4">Error: {jobsErr}</div>
             ) : !jobs ? (
               <div className="text-slate-400 text-sm px-6 py-4">Loading…</div>
-            ) : jobs.length === 0 ? (
+            ) : activeJobCount === 0 ? (
               <div className="text-sm text-slate-400 px-6 py-4 text-center">
-                No background jobs yet. Batches over {SYNC_THRESHOLD} contacts are queued here automatically.
+                No active jobs.{" "}
+                <Link href="/history" className="text-blue-500 hover:underline">View History</Link>
+                {" "}for completed results.
               </div>
             ) : (
               <table className="w-full text-sm">
@@ -502,11 +501,10 @@ export default function BatchPage() {
                     <th className="text-left px-3 py-2 font-medium">Progress</th>
                     <th className="text-left px-3 py-2 font-medium">Provider</th>
                     <th className="text-left px-3 py-2 font-medium">Created</th>
-                    <th className="text-left px-3 py-2 font-medium">Completed</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {jobs.map(j => {
+                  {jobs.filter(j => j.status === "queued" || j.status === "running").map(j => {
                     const pct = j.total > 0 ? Math.round((j.done_count / j.total) * 100) : 0;
                     const isNew = j.id === highlightedJobId;
                     return (
@@ -536,9 +534,6 @@ export default function BatchPage() {
                         </td>
                         <td className="px-3 py-2 text-slate-600 text-xs">{j.verify_provider}</td>
                         <td className="px-3 py-2 text-xs text-slate-500">{new Date(j.created_at).toLocaleString()}</td>
-                        <td className="px-3 py-2 text-xs text-slate-500">
-                          {j.completed_at ? new Date(j.completed_at).toLocaleString() : "—"}
-                        </td>
                       </tr>
                     );
                   })}
