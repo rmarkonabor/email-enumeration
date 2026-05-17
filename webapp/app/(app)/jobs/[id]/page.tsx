@@ -40,7 +40,32 @@ type JobResult = {
   mail_provider: string | null;
   credits_used: number;
   error?: string;
+  reason?: string;
 };
+
+function summariseThrottles(results: JobResult[]): { count: number; perDomain: { domain: string; count: number }[]; otherReasons: { reason: string; count: number }[] } {
+  const perDomain: Record<string, number> = {};
+  const otherReasons: Record<string, number> = {};
+  let count = 0;
+  for (const r of results) {
+    if (r.status !== "throttled" || !r.reason) continue;
+    count++;
+    if (r.reason.startsWith("smtp_per_domain_cap_reached:")) {
+      const d = r.reason.split(":", 2)[1] || r.request.domain;
+      perDomain[d] = (perDomain[d] || 0) + 1;
+    } else if (r.reason.startsWith("smtp_per_domain_soft_block:")) {
+      const d = r.reason.split(":", 2)[1] || r.request.domain;
+      perDomain[d] = (perDomain[d] || 0) + 1;
+    } else {
+      otherReasons[r.reason] = (otherReasons[r.reason] || 0) + 1;
+    }
+  }
+  return {
+    count,
+    perDomain: Object.entries(perDomain).map(([domain, count]) => ({ domain, count })).sort((a, b) => b.count - a.count),
+    otherReasons: Object.entries(otherReasons).map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count),
+  };
+}
 
 type Job = {
   id: string;
@@ -273,6 +298,32 @@ export default function JobDetailPage() {
 
       <div>
         <h2 className="text-sm font-semibold text-slate-900 mb-2">Results ({job.results.length})</h2>
+        {(() => {
+          const t = summariseThrottles(job.results);
+          if (t.count === 0) return null;
+          return (
+            <div className="mb-3 bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900">
+              <div className="font-medium mb-1">{t.count} contact{t.count === 1 ? "" : "s"} throttled</div>
+              {t.perDomain.length > 0 && (
+                <div>
+                  Per-domain cap reached on:{" "}
+                  {t.perDomain.slice(0, 5).map((d, i) => (
+                    <span key={d.domain} className="font-mono">
+                      {i > 0 && ", "}{d.domain} ({d.count})
+                    </span>
+                  ))}
+                  {t.perDomain.length > 5 && <span> +{t.perDomain.length - 5} more</span>}
+                  <span className="block mt-0.5 text-amber-700">These will retry after the daily counters reset at 00:00 UTC.</span>
+                </div>
+              )}
+              {t.otherReasons.length > 0 && (
+                <div className="mt-1">
+                  Other: {t.otherReasons.map(r => `${r.reason} (${r.count})`).join(", ")}
+                </div>
+              )}
+            </div>
+          );
+        })()}
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
           {job.results.length === 0 ? (
             <div className="text-sm text-slate-400 p-4">No results yet — refreshing…</div>
@@ -293,7 +344,14 @@ export default function JobDetailPage() {
                     <td className="px-3 py-2">{r.request.first_name} {r.request.last_name}</td>
                     <td className="px-3 py-2 font-mono text-xs text-slate-600">{r.request.domain}</td>
                     <td className="px-3 py-2 font-mono text-xs">{r.email ?? "—"}</td>
-                    <td className="px-3 py-2"><StatusBadge status={r.status} /></td>
+                    <td className="px-3 py-2">
+                      <StatusBadge status={r.status} />
+                      {r.reason && (
+                        <div className="mt-0.5 text-xs text-slate-400 font-mono" title={r.reason}>
+                          {r.reason.length > 40 ? r.reason.slice(0, 40) + "…" : r.reason}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-slate-500">{r.mail_provider ?? "—"}</td>
                   </tr>
                 ))}
