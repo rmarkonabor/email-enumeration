@@ -1,9 +1,15 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { addHistory, generateRunId, type FindRequest, type FindResponse } from "@/lib/api";
 import StatusBadge from "@/components/StatusBadge";
 import ProviderPicker from "@/components/ProviderPicker";
+
+// Mirrors backend jobs.SYNC_THRESHOLD. Batches above this go to the background
+// job queue and return a job_id instead of streaming results inline.
+const SYNC_THRESHOLD = 25;
 
 interface Row extends FindRequest {
   _id: number;
@@ -47,6 +53,7 @@ export default function BatchPage() {
   const [eta, setEta] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const router = useRouter();
   const startTimeRef = useRef<number>(0);
 
   function updateRow(id: number, field: keyof FindRequest, value: string) {
@@ -119,11 +126,37 @@ export default function BatchPage() {
       state: "pending",
     }));
     setResults(initialResults);
+
+    const { baseUrl, apiKey, verifyProvider, zerobounceKey, reoonKey } = getConfig();
+
+    // Large batches: enqueue as a background job and redirect to the job view.
+    // Small batches keep the existing inline-streaming behavior.
+    if (contacts.length > SYNC_THRESHOLD) {
+      try {
+        const res = await fetch(`${baseUrl}/find/batch`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-API-Key": apiKey },
+          body: JSON.stringify({ contacts, verify_provider: verifyProvider, zerobounce_api_key: zerobounceKey, reoon_api_key: reoonKey }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          const detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail ?? data);
+          throw new Error(detail || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        setLoading(false);
+        router.push(`/jobs/${data.job_id}`);
+        return;
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : "Failed to enqueue batch");
+        setLoading(false);
+        return;
+      }
+    }
+
     localStorage.setItem("ef_active_batch", JSON.stringify({
       done: 0, total: valid.length, startedAt: startTimeRef.current,
     }));
-
-    const { baseUrl, apiKey, verifyProvider, zerobounceKey, reoonKey } = getConfig();
 
     try {
       const res = await fetch(`${baseUrl}/find/batch/stream`, {
@@ -223,7 +256,10 @@ export default function BatchPage() {
         <h1 className="text-2xl font-bold text-slate-900">Batch / CSV lookup</h1>
         <ProviderPicker />
       </div>
-      <p className="text-slate-400 text-sm mb-6">Upload a CSV or add rows manually. Max 50 contacts per run.</p>
+      <p className="text-slate-400 text-sm mb-6">
+        Upload a CSV or add rows manually. Up to {SYNC_THRESHOLD} contacts run live;
+        larger batches are queued as background <Link href="/jobs" className="text-blue-600 hover:underline">jobs</Link> that survive page reloads.
+      </p>
 
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 mb-6">
         <div className="flex items-center gap-3 mb-5">

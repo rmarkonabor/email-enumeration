@@ -26,6 +26,7 @@ from slowapi.errors import RateLimitExceeded
 
 from .auth import UserContext, invalidate_cache, validate_key
 from .cache import Cache
+from .jobs import JobStore, JobWorker, SYNC_THRESHOLD, check_quota
 from .metrics import Metrics, Warmup
 from .smtp_verifier import SMTPVerifier
 from .verifier import EmailFinder
@@ -46,8 +47,13 @@ CATCH_ALL_TTL = int(os.getenv("CATCH_ALL_TTL_SECONDS", str(60 * 60 * 24 * 30)))
 VERIFIED_TTL = int(os.getenv("VERIFIED_TTL_SECONDS", str(60 * 60 * 24 * 14)))
 PACING_SECONDS = float(os.getenv("PACING_SECONDS", "0.3"))
 
-MAX_BATCH_SIZE = 50
+MAX_BATCH_SIZE = int(os.getenv("MAX_BATCH_SIZE", "5000"))
 RATE_LIMIT = os.getenv("RATE_LIMIT", "500/minute")
+
+# Per-user daily quota for batch verification (used + pending + new <= quota).
+# Default sized so 5 users sharing a 3-IP day-60 pool (~17k/day) each get
+# ~3,500/day with 70% headroom. Override via env or per-user later.
+DEFAULT_USER_DAILY_QUOTA = int(os.getenv("DEFAULT_USER_DAILY_QUOTA", "3500"))
 
 # ----- SMTP warm-up -----
 # Daily-cap schedule lives in metrics.DEFAULT_STEPPED_SCHEDULE (B2B-tuned).
@@ -138,10 +144,17 @@ async def lifespan(app: FastAPI):
     )
     app.state.metrics = metrics
     app.state.warmup = warmup
-    app.state.finder = EmailFinder(
+    finder = EmailFinder(
         verifier=verifier, cache=cache, pacing_seconds=PACING_SECONDS,
         metrics=metrics, warmup=warmup, source_ips=SMTP_SOURCE_IPS,
     )
+    app.state.finder = finder
+
+    job_store = JobStore(DB_PATH)
+    job_worker = JobWorker(store=job_store, finder=finder, warmup=warmup)
+    app.state.job_store = job_store
+    app.state.job_worker = job_worker
+    job_worker.start()
 
     # Run once on startup so a restart actually clears anything overdue,
     # then every 24h.
@@ -161,6 +174,7 @@ async def lifespan(app: FastAPI):
             await purge_task
         except asyncio.CancelledError:
             pass
+        await job_worker.stop()
 
 
 app = FastAPI(
@@ -247,6 +261,17 @@ class BatchRequest(BaseModel):
 
 class BatchResponse(BaseModel):
     results: list[FindResponse]
+
+
+class JobAcceptedResponse(BaseModel):
+    """Returned when a batch is queued for background processing."""
+    job_id: str
+    status: str
+    total: int
+    queue_position: int
+    eta_seconds: int | None
+    quota: dict
+    sync_threshold: int
 
 
 # ----- Endpoints -----
@@ -394,11 +419,24 @@ async def find_stream(request: Request, req: StreamRequest,
 
 @app.post(
     "/find/batch/stream",
-    summary="Stream live progress for a batch lookup (SSE)",
+    summary=("Stream live progress for a small batch lookup (SSE). "
+             f"Batches over {SYNC_THRESHOLD} contacts are rejected with 413 — "
+             "POST them to /find/batch instead to queue."),
 )
 @limiter.limit(RATE_LIMIT)
 async def find_batch_stream(request: Request, req: BatchRequest,
                              ctx: UserContext = Depends(require_api_key)) -> StreamingResponse:
+    if len(req.contacts) > SYNC_THRESHOLD:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "error": "batch_too_large_for_sync",
+                "size": len(req.contacts),
+                "sync_threshold": SYNC_THRESHOLD,
+                "hint": "POST to /find/batch instead to queue this as a background job.",
+            },
+        )
+    _enforce_quota(ctx, len(req.contacts))
     _check_smtp_pool(req.verify_provider)
     finder: EmailFinder = app.state.finder
 
@@ -429,14 +467,94 @@ async def find_batch_stream(request: Request, req: BatchRequest,
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+def _quota_for_user(ctx: UserContext) -> int:
+    """Per-user daily verification quota. Today: global default; later, override
+    in Supabase profiles.daily_quota."""
+    return DEFAULT_USER_DAILY_QUOTA
+
+
+def _enforce_quota(ctx: UserContext, new_contacts: int) -> dict:
+    """Raises HTTP 429 if adding ``new_contacts`` would exceed this user's quota.
+    Returns the quota snapshot dict on success (for echoing to the client)."""
+    if not ctx.user_id:
+        return {"available": new_contacts, "used_today": 0, "pending": 0,
+                "quota": new_contacts}
+    metrics: Metrics = app.state.metrics
+    store: JobStore = app.state.job_store
+    quota = _quota_for_user(ctx)
+    check = check_quota(store, metrics.user_lookups_today, ctx.user_id, new_contacts, quota)
+    if not check.allowed:
+        raise HTTPException(status_code=429, detail={
+            "error": "daily_quota_exceeded",
+            "used_today": check.used_today,
+            "pending": check.pending,
+            "quota": check.quota,
+            "available": check.available,
+            "requested": new_contacts,
+        })
+    return {"used_today": check.used_today, "pending": check.pending,
+            "quota": check.quota, "available": check.available}
+
+
+def _estimate_eta_seconds(store: JobStore, warmup: Warmup, contacts_ahead: int) -> int | None:
+    """Rough ETA: contacts ahead in the global queue divided by current
+    per-IP cap × num IPs, expressed as a fraction of remaining day-seconds."""
+    if not warmup:
+        return None
+    cap = warmup.total_cap()
+    if cap <= 0:
+        return None
+    # Use today's remaining capacity as throughput floor (very rough but honest).
+    stats = warmup.today_stats()
+    remaining_today = max(1, stats.get("remaining", cap))
+    if contacts_ahead <= remaining_today:
+        # Assume worker processes ~1 contact/sec at sustained pace (single worker, 0.1s pacing + DNS + SMTP)
+        return max(1, contacts_ahead * 2)
+    # If queue exceeds today's capacity, span into future days.
+    full_days = (contacts_ahead - remaining_today) // cap
+    return int(full_days * 86400 + remaining_today * 2)
+
+
 @app.post(
     "/find/batch",
-    response_model=BatchResponse,
-    summary="Find verified emails for multiple contacts (max 50)",
+    response_model=None,
+    summary=("Find verified emails for multiple contacts. Small batches "
+             f"(≤{SYNC_THRESHOLD}) run synchronously and return BatchResponse; "
+             "larger batches enqueue and return JobAcceptedResponse."),
 )
 @limiter.limit(RATE_LIMIT)
 async def find_batch(request: Request, req: BatchRequest,
-                      ctx: UserContext = Depends(require_api_key)) -> BatchResponse:
+                      ctx: UserContext = Depends(require_api_key)):
+    quota_snapshot = _enforce_quota(ctx, len(req.contacts))
+
+    # --- Large batches: enqueue and return immediately ---
+    if len(req.contacts) > SYNC_THRESHOLD:
+        store: JobStore = app.state.job_store
+        warmup: Warmup = app.state.warmup
+        job_id = store.create(
+            user_id=ctx.user_id or "",
+            contacts=[c.model_dump() for c in req.contacts],
+            verify_provider=req.verify_provider,
+            zerobounce_api_key=req.zerobounce_api_key,
+            reoon_api_key=req.reoon_api_key,
+        )
+        position = store.queue_position(job_id)
+        # Contacts ahead in the global queue (other users' pending work)
+        all_users = store.users_with_active_jobs()
+        contacts_ahead = sum(store.pending_count_for_user(u) for u in all_users
+                              if u != (ctx.user_id or "")) + len(req.contacts)
+        eta = _estimate_eta_seconds(store, warmup, contacts_ahead)
+        return JobAcceptedResponse(
+            job_id=job_id,
+            status="queued",
+            total=len(req.contacts),
+            queue_position=position,
+            eta_seconds=eta,
+            quota=quota_snapshot,
+            sync_threshold=SYNC_THRESHOLD,
+        )
+
+    # --- Small batches: existing synchronous path ---
     _check_smtp_pool(req.verify_provider)
     finder: EmailFinder = app.state.finder
 
@@ -461,7 +579,6 @@ async def find_batch(request: Request, req: BatchRequest,
                 fallback_recommended=False,
             )
 
-    # Run with bounded concurrency to avoid hammering a single domain's mail server
     sem = asyncio.Semaphore(5)
 
     async def _bounded(c: FindRequest) -> FindResponse:
@@ -470,6 +587,99 @@ async def find_batch(request: Request, req: BatchRequest,
 
     results = await asyncio.gather(*(_bounded(c) for c in req.contacts))
     return BatchResponse(results=results)
+
+
+# ============================================================================
+# Background batch jobs — anything over SYNC_THRESHOLD is queued and processed
+# by a single worker round-robining across users.
+# ============================================================================
+
+
+def _can_view_job(job: dict, ctx: UserContext) -> bool:
+    return ctx.is_admin or job["user_id"] == (ctx.user_id or "")
+
+
+@app.get(
+    "/jobs",
+    summary="List the caller's batch jobs (most recent first)",
+)
+async def list_jobs(ctx: UserContext = Depends(require_api_key),
+                     limit: int = 50) -> dict:
+    store: JobStore = app.state.job_store
+    return {"jobs": store.list_for_user(ctx.user_id or "", limit=min(limit, 200))}
+
+
+@app.get(
+    "/jobs/{job_id}",
+    summary="Get current state of a batch job",
+)
+async def get_job(job_id: str, ctx: UserContext = Depends(require_api_key)) -> dict:
+    store: JobStore = app.state.job_store
+    job = store.get(job_id)
+    if not job or not _can_view_job(job, ctx):
+        raise HTTPException(404, "job not found")
+    # Strip sensitive provider keys from the response
+    job.pop("zerobounce_api_key", None)
+    job.pop("reoon_api_key", None)
+    if job["status"] in ACTIVE_STATUSES_SET:
+        job["queue_position"] = store.queue_position(job_id)
+    return job
+
+
+@app.get(
+    "/jobs/{job_id}/stream",
+    summary="SSE stream of incremental job state until terminal",
+)
+async def stream_job(job_id: str, ctx: UserContext = Depends(require_api_key)) -> StreamingResponse:
+    store: JobStore = app.state.job_store
+    job = store.get(job_id)
+    if not job or not _can_view_job(job, ctx):
+        raise HTTPException(404, "job not found")
+
+    async def gen():
+        last_done = -1
+        last_status = ""
+        while True:
+            current = store.get(job_id)
+            if not current:
+                yield f"data: {json.dumps({'type': 'gone'})}\n\n"
+                return
+            if current["done_count"] != last_done or current["status"] != last_status:
+                last_done = current["done_count"]
+                last_status = current["status"]
+                payload = {
+                    "type": "update",
+                    "status": current["status"],
+                    "total": current["total"],
+                    "done_count": current["done_count"],
+                    "results": current["results"],
+                }
+                if current["status"] in ACTIVE_STATUSES_SET:
+                    payload["queue_position"] = store.queue_position(job_id)
+                yield f"data: {json.dumps(payload)}\n\n"
+            if current["status"] in TERMINAL_STATUSES_SET:
+                return
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post(
+    "/jobs/{job_id}/cancel",
+    summary="Cancel a queued or running job",
+)
+async def cancel_job(job_id: str, ctx: UserContext = Depends(require_api_key)) -> dict:
+    store: JobStore = app.state.job_store
+    if not store.request_cancel(job_id, ctx.user_id or ""):
+        raise HTTPException(404, "job not found or not cancellable")
+    return {"cancelled": True}
+
+
+# Module-level frozen sets so the handlers don't reimport per call
+from .jobs import ACTIVE_STATUSES, TERMINAL_STATUSES
+ACTIVE_STATUSES_SET = frozenset(ACTIVE_STATUSES)
+TERMINAL_STATUSES_SET = frozenset(TERMINAL_STATUSES)
 
 
 # ============================================================================
