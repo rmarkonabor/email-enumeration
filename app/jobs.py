@@ -458,12 +458,19 @@ class JobWorker:
         if (job["verify_provider"] == "smtp"
                 and self.warmup is not None
                 and self.warmup.is_pool_exhausted()):
+            # Check cancel before deferring — user shouldn't have to wait for
+            # a pool-exhaustion sleep just to see their cancel take effect.
+            if self.store.apply_cancel_if_requested(job["id"]):
+                self._consecutive_skips = 0
+                return
             self._rotation.append(user_id)
             self._consecutive_skips += 1
-            # If we've cycled through every active user and they're all blocked,
-            # then sleep — no point spinning DB queries every few ms.
             if self._consecutive_skips >= max(1, len(self._rotation) + 1):
-                await asyncio.sleep(self.pool_exhausted_sleep)
+                # Sleep in 5s chunks so cancel requests are applied promptly.
+                slept = 0.0
+                while slept < self.pool_exhausted_sleep and not self._stopping:
+                    await asyncio.sleep(min(5.0, self.pool_exhausted_sleep - slept))
+                    slept += 5.0
                 self._consecutive_skips = 0
             return
 

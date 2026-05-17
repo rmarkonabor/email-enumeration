@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import StatusBadge from "@/components/StatusBadge";
@@ -72,11 +72,13 @@ export default function JobDetailPage() {
   const [job, setJob] = useState<Job | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const reloadRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     async function load() {
+      if (timer) { clearTimeout(timer); timer = null; }
       const apiKey = localStorage.getItem("ef_api_key") || "";
       try {
         const r = await fetch(`${API_BASE}/jobs/${jobId}`, { headers: { "X-API-Key": apiKey } });
@@ -130,9 +132,11 @@ export default function JobDetailPage() {
         if (!cancelled) setErr(e instanceof Error ? e.message : "Failed to load job");
       }
     }
+    reloadRef.current = load;
     load();
     return () => {
       cancelled = true;
+      reloadRef.current = null;
       if (timer) clearTimeout(timer);
     };
   }, [jobId]);
@@ -145,6 +149,9 @@ export default function JobDetailPage() {
       method: "POST",
       headers: { "X-API-Key": apiKey },
     });
+    // Immediately re-fetch so the UI reflects cancel_requested without
+    // waiting for the next scheduled poll.
+    reloadRef.current?.();
     setCancelling(false);
   }
 
