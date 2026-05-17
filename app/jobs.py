@@ -255,7 +255,8 @@ class JobStore:
         with self._conn() as conn:
             cur = conn.execute(
                 "UPDATE batch_jobs SET status = 'queued', started_at = NULL "
-                "WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ?",
+                "WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ? "
+                "AND done_count < total",
                 (cutoff,),
             )
             conn.commit()

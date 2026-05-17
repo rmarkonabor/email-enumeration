@@ -196,11 +196,16 @@ async def _ratelimit_handler(request: Request, exc: RateLimitExceeded) -> JSONRe
     )
 
 
+_ALLOWED_ORIGINS = [o.strip() for o in os.getenv(
+    "ALLOWED_ORIGINS",
+    "https://email-enumeration.vercel.app,https://email-enumeration-git-main-rmarkonabors-projects.vercel.app",
+).split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Content-Type", "X-API-Key"],
 )
 
 
@@ -558,6 +563,12 @@ async def find_batch(request: Request, req: BatchRequest,
     _check_smtp_pool(req.verify_provider)
     finder: EmailFinder = app.state.finder
 
+    _batch_provider_key = (
+        req.zerobounce_api_key if req.verify_provider == "zerobounce"
+        else req.reoon_api_key if req.verify_provider == "reoon"
+        else ""
+    )
+
     async def _one(contact: FindRequest) -> FindResponse:
         try:
             result = await finder.find(
@@ -566,6 +577,8 @@ async def find_batch(request: Request, req: BatchRequest,
                 domain=contact.domain,
                 middle_name=contact.middle_name,
                 return_attempts=contact.return_attempts,
+                provider=req.verify_provider,
+                provider_key=_batch_provider_key,
                 user_id=ctx.user_id,
             )
             return _to_response(result, contact.return_attempts)
