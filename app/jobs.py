@@ -55,11 +55,14 @@ CREATE TABLE IF NOT EXISTS batch_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_bj_user ON batch_jobs (user_id);
 CREATE INDEX IF NOT EXISTS idx_bj_status ON batch_jobs (status, created_at);
-CREATE INDEX IF NOT EXISTS idx_bj_region ON batch_jobs (region, status, created_at);
 """
 
 _MIGRATION_ADD_REGION = (
     "ALTER TABLE batch_jobs ADD COLUMN region TEXT NOT NULL DEFAULT 'us'"
+)
+
+_MIGRATION_ADD_REGION_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_bj_region ON batch_jobs (region, status, created_at)"
 )
 
 
@@ -82,12 +85,15 @@ class JobStore:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             conn.executescript(SCHEMA)
-            # Migrate existing DB: add region column if not present.
+            # Migrate existing DB: add region column if not present, then
+            # create the index (must come after column exists).
             try:
                 conn.execute(_MIGRATION_ADD_REGION)
                 conn.commit()
             except sqlite3.OperationalError:
                 pass  # column already exists
+            conn.execute(_MIGRATION_ADD_REGION_INDEX)
+            conn.commit()
             # Reset running jobs for THIS region only — safe on shared DB when
             # multiple regional servers restart independently.
             conn.execute(
