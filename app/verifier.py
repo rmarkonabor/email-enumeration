@@ -334,16 +334,21 @@ class EmailFinder:
             if self.warmup is not None:
                 self.warmup.record_attempt(result.response_code, domain, source_ip=source_ip or "",
                                             provider=provider_bucket, response_ms=response_ms)
-            if self.metrics is not None:
-                self.metrics.log_result("smtp", candidate, result.status, result.response_code,
-                                         response_ms, user_id=user_id)
             attempt = {"email": candidate, "status": result.status, "code": result.response_code}
             attempts.append(attempt)
             yield {"type": "attempt", **attempt}
 
             if result.status == "verified":
+                if self.metrics is not None:
+                    self.metrics.log_result("smtp", candidate, result.status, result.response_code,
+                                            response_ms, user_id=user_id,
+                                            candidates_tried=len(attempts), credits_used=0)
                 yield _done_event(candidate, "verified", False, attempts, False, mail_provider)
                 return
+            if self.metrics is not None:
+                self.metrics.log_result("smtp", candidate, result.status, result.response_code,
+                                        response_ms, user_id=user_id,
+                                        candidates_tried=len(attempts), credits_used=0)
             if self.pacing_seconds > 0:
                 await asyncio.sleep(self.pacing_seconds)
 
@@ -380,18 +385,28 @@ class EmailFinder:
             response_ms = int((time.perf_counter() - t0) * 1000)
             if billed:
                 credits_used += 1
-            if self.metrics is not None:
-                self.metrics.log_result(provider, candidate, status, None, response_ms, user_id=user_id)
             attempt = {"email": candidate, "status": status, "provider": provider}
             attempts.append(attempt)
             yield {"type": "attempt", **attempt}
 
             if status == "verified":
+                if self.metrics is not None:
+                    self.metrics.log_result(provider, candidate, status, None, response_ms,
+                                            user_id=user_id, candidates_tried=len(attempts),
+                                            credits_used=credits_used)
                 yield _done_event(candidate, "verified", False, attempts, False, mail_provider, credits_used)
                 return
             if status == "catch_all":
+                if self.metrics is not None:
+                    self.metrics.log_result(provider, candidate, status, None, response_ms,
+                                            user_id=user_id, candidates_tried=len(attempts),
+                                            credits_used=credits_used)
                 yield _done_event(candidates[0], "catch_all", True, attempts, True, mail_provider, credits_used)
                 return
+            if self.metrics is not None:
+                self.metrics.log_result(provider, candidate, status, None, response_ms,
+                                        user_id=user_id, candidates_tried=len(attempts),
+                                        credits_used=credits_used)
 
         yield _done_event(None, "not_found", False, attempts, True, mail_provider, credits_used)
 

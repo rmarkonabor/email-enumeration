@@ -46,10 +46,13 @@ function fmt(n: number) {
 function MetricCard({
   label, value, sub, color,
 }: { label: string; value: string | number; sub?: string; color?: string }) {
+  const display = typeof value === "number" && !Number.isInteger(value)
+    ? value.toFixed(2)
+    : fmt(Number(value));
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-5">
       <div className="text-xs text-slate-500 font-medium mb-1">{label}</div>
-      <div className={`text-2xl font-bold ${color ?? "text-slate-900"}`}>{fmt(Number(value))}</div>
+      <div className={`text-2xl font-bold ${color ?? "text-slate-900"}`}>{display}</div>
       {sub && <div className="text-xs text-slate-400 mt-0.5">{sub}</div>}
     </div>
   );

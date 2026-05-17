@@ -67,7 +67,9 @@ CREATE TABLE IF NOT EXISTS verification_log (
     smtp_code INTEGER,
     response_ms INTEGER,
     soft_block INTEGER NOT NULL DEFAULT 0,
-    user_id TEXT
+    user_id TEXT,
+    candidates_tried INTEGER NOT NULL DEFAULT 0,
+    credits_used INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_vl_ts ON verification_log (ts);
 CREATE INDEX IF NOT EXISTS idx_vl_email ON verification_log (email);
