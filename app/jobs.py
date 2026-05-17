@@ -565,7 +565,16 @@ class JobWorker:
                     "error": str(e)[:200],
                 }
 
-        self.store.append_result(job["id"], response)
+        try:
+            self.store.append_result(job["id"], response)
+        except Exception as e:
+            # If we can't persist the result the done_count won't increment and
+            # this contact would be retried forever. Mark the job failed so it
+            # doesn't loop — the stale watchdog would catch it in an hour anyway.
+            logger.critical("append_result failed for job=%s contact=%d, marking failed: %s",
+                            job["id"], job["done_count"], e)
+            self.store.mark_failed(job["id"], f"DB write failed: {e}")
+            return
 
         # Re-check job state after this contact
         updated = self.store.get(job["id"])
