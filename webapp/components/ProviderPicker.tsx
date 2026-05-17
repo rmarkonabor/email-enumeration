@@ -36,17 +36,21 @@ export default function ProviderPicker() {
   return (
     <div className="flex items-center gap-2">
       <span className="text-xs text-slate-400 font-medium">Verify via</span>
-      <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium bg-white">
-        {OPTIONS.map(o => {
+      <div className="flex rounded-lg border border-slate-200 text-xs font-medium bg-white">
+        {OPTIONS.map((o, i) => {
           const hasKey = o.keyStorage === null || keys[o.keyStorage];
           const isActive = provider === o.id;
+          const isFirst = i === 0;
+          const isLast = i === OPTIONS.length - 1;
           return (
             <div key={o.id} className="relative group">
               <button
                 type="button"
                 onClick={() => hasKey && switchProvider(o.id)}
                 disabled={!hasKey}
-                className={`px-3 py-1.5 transition-colors ${
+                className={`px-3 py-1.5 transition-colors border-l border-slate-200 first:border-l-0 ${
+                  isFirst ? "rounded-l-lg" : ""
+                } ${isLast ? "rounded-r-lg" : ""} ${
                   isActive
                     ? "bg-blue-600 text-white"
                     : hasKey
