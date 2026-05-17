@@ -851,3 +851,15 @@ async def admin_system(ctx: UserContext = Depends(require_admin)) -> dict:
         "volume_24h": metrics.today_volume(),
         "pool_exhausted": warmup.is_pool_exhausted(),
     }
+
+
+@app.post(
+    "/admin/jobs/reset-stale",
+    summary="Reset jobs stuck in 'running' back to 'queued' (admin only)",
+)
+async def admin_reset_stale_jobs(ctx: UserContext = Depends(require_admin)) -> dict:
+    store: JobStore = app.state.job_store
+    reset = store.reset_stale_running_jobs(stale_after_seconds=0)  # reset ALL running
+    worker: JobWorker = app.state.job_worker
+    worker._rotation.clear()  # force rotation refill on next tick
+    return {"reset": reset}

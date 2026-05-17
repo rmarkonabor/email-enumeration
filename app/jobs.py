@@ -248,6 +248,19 @@ class JobStore:
             ).fetchone()
         return int(row[0])
 
+    def reset_stale_running_jobs(self, stale_after_seconds: int = 3600) -> int:
+        """Reset jobs that have been stuck in 'running' for too long back to
+        'queued' so the worker re-attempts them. Returns the number reset."""
+        cutoff = int(time.time()) - stale_after_seconds
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE batch_jobs SET status = 'queued', started_at = NULL "
+                "WHERE status = 'running' AND started_at IS NOT NULL AND started_at < ?",
+                (cutoff,),
+            )
+            conn.commit()
+            return cur.rowcount
+
     def queue_position(self, job_id: str) -> int:
         """How many jobs are ahead of this one in the FIFO. 0 = next."""
         with self._conn() as conn:
@@ -364,15 +377,18 @@ class JobWorker:
         self._rotation: deque[str] = deque()
         self._task: asyncio.Task | None = None
         self._stopping = False
-        # Counts consecutive ticks where every active user was SMTP+blocked.
-        # When it exceeds the rotation size we sleep instead of CPU-spinning.
         self._consecutive_skips = 0
+        self._last_stale_check = 0.0
 
     def start(self) -> None:
         if self._task is None or self._task.done():
             self._stopping = False
             self._task = asyncio.create_task(self._loop(), name="job-worker")
             logger.info("Job worker started")
+            # Reset any jobs already stuck at startup
+            reset = self.store.reset_stale_running_jobs()
+            if reset:
+                logger.warning("Reset %d stale running job(s) to queued on startup", reset)
 
     async def stop(self) -> None:
         self._stopping = True
@@ -386,6 +402,15 @@ class JobWorker:
     async def _loop(self) -> None:
         while not self._stopping:
             try:
+                # Periodically reset jobs stuck in 'running' for > 1 hour
+                now = time.time()
+                if now - self._last_stale_check > 3600:
+                    reset = self.store.reset_stale_running_jobs()
+                    if reset:
+                        logger.warning("Stale-job watchdog reset %d job(s) to queued", reset)
+                        self._rotation.clear()  # Force rotation refill
+                    self._last_stale_check = now
+
                 await self._tick()
             except asyncio.CancelledError:
                 raise
