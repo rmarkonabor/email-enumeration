@@ -887,6 +887,81 @@ async def admin_system(ctx: UserContext = Depends(require_admin)) -> dict:
     }
 
 
+@app.get(
+    "/admin/server",
+    summary="Hetzner server health — disk, memory, CPU, uptime (admin only)",
+)
+async def admin_server(ctx: UserContext = Depends(require_admin)) -> dict:
+    import time
+    try:
+        import psutil
+
+        boot_ts = psutil.boot_time()
+        uptime_s = int(time.time() - boot_ts)
+
+        mem = psutil.virtual_memory()
+        memory = {
+            "total_mb": round(mem.total / 1024 / 1024),
+            "used_mb": round(mem.used / 1024 / 1024),
+            "available_mb": round(mem.available / 1024 / 1024),
+            "percent": mem.percent,
+        }
+
+        disk = psutil.disk_usage(DB_PATH if DB_PATH.startswith("/") else "/")
+        db_path = Path(DB_PATH)
+        db_size_mb = round(db_path.stat().st_size / 1024 / 1024, 2) if db_path.exists() else 0
+        disk_info = {
+            "total_gb": round(disk.total / 1024 / 1024 / 1024, 1),
+            "used_gb": round(disk.used / 1024 / 1024 / 1024, 1),
+            "free_gb": round(disk.free / 1024 / 1024 / 1024, 1),
+            "percent": disk.percent,
+            "db_size_mb": db_size_mb,
+        }
+
+        load1, load5, load15 = psutil.getloadavg()
+        cpu_count = psutil.cpu_count(logical=True) or 1
+        cpu = {
+            "load1": round(load1, 2),
+            "load5": round(load5, 2),
+            "load15": round(load15, 2),
+            "load1_pct": round(load1 / cpu_count * 100, 1),
+            "count": cpu_count,
+        }
+
+    except ImportError:
+        import shutil
+        total, used, free = shutil.disk_usage(DB_PATH if DB_PATH.startswith("/") else "/")
+        db_path = Path(DB_PATH)
+        db_size_mb = round(db_path.stat().st_size / 1024 / 1024, 2) if db_path.exists() else 0
+        boot_ts = 0
+        uptime_s = 0
+        try:
+            with open("/proc/uptime") as f:
+                uptime_s = int(float(f.read().split()[0]))
+        except Exception:
+            pass
+        disk_pct = round(used / total * 100, 1) if total else 0
+        disk_info = {
+            "total_gb": round(total / 1024 / 1024 / 1024, 1),
+            "used_gb": round(used / 1024 / 1024 / 1024, 1),
+            "free_gb": round(free / 1024 / 1024 / 1024, 1),
+            "percent": disk_pct,
+            "db_size_mb": db_size_mb,
+        }
+        memory = {"total_mb": 0, "used_mb": 0, "available_mb": 0, "percent": 0}
+        cpu = {"load1": 0, "load5": 0, "load15": 0, "load1_pct": 0, "count": 1}
+
+    uptime_h = uptime_s // 3600
+    uptime_m = (uptime_s % 3600) // 60
+    return {
+        "uptime_seconds": uptime_s,
+        "uptime_human": f"{uptime_h}h {uptime_m}m",
+        "disk": disk_info,
+        "memory": memory,
+        "cpu": cpu,
+    }
+
+
 @app.post(
     "/admin/jobs/reset-stale",
     summary="Reset jobs stuck in 'running' back to 'queued' (admin only)",

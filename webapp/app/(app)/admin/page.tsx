@@ -56,8 +56,17 @@ type SystemData = {
   pool_exhausted: boolean;
 };
 
+type ServerData = {
+  uptime_seconds: number;
+  uptime_human: string;
+  disk: { total_gb: number; used_gb: number; free_gb: number; percent: number; db_size_mb: number };
+  memory: { total_mb: number; used_mb: number; available_mb: number; percent: number };
+  cpu: { load1: number; load5: number; load15: number; load1_pct: number; count: number };
+};
+
 export default function AdminSystemPage() {
   const [data, setData] = useState<SystemData | null>(null);
+  const [server, setServer] = useState<ServerData | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, []);
@@ -65,9 +74,13 @@ export default function AdminSystemPage() {
   async function load() {
     const key = localStorage.getItem("ef_api_key") || "";
     try {
-      const r = await fetch(`${API_BASE}/admin/system`, { headers: { "X-API-Key": key } });
-      if (!r.ok) { setErr(`HTTP ${r.status}`); return; }
-      setData(await r.json());
+      const [sysRes, srvRes] = await Promise.all([
+        fetch(`${API_BASE}/admin/system`, { headers: { "X-API-Key": key } }),
+        fetch(`${API_BASE}/admin/server`, { headers: { "X-API-Key": key } }),
+      ]);
+      if (!sysRes.ok) { setErr(`HTTP ${sysRes.status}`); return; }
+      setData(await sysRes.json());
+      if (srvRes.ok) setServer(await srvRes.json());
       setErr(null);
     } catch (e: any) { setErr(e.message); }
   }
@@ -79,6 +92,7 @@ export default function AdminSystemPage() {
 
   return (
     <div className="space-y-6">
+      {server && <ServerHealth s={server} />}
       {pool_exhausted && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-800">
           <strong>SMTP pool exhausted.</strong> All configured IPs are at cap or paused. New SMTP requests will be rejected (HTTP 503) until UTC midnight.
@@ -198,6 +212,59 @@ export default function AdminSystemPage() {
               </div>
             ))}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UsageBar({ pct, warn = 70, crit = 85 }: { pct: number; warn?: number; crit?: number }) {
+  const color = pct >= crit ? "bg-red-500" : pct >= warn ? "bg-amber-400" : "bg-emerald-500";
+  return (
+    <div className="w-full bg-slate-100 rounded-full h-1.5 mt-1">
+      <div className={`${color} h-1.5 rounded-full transition-all`} style={{ width: `${Math.min(pct, 100)}%` }} />
+    </div>
+  );
+}
+
+function ServerHealth({ s }: { s: ServerData }) {
+  const diskWarn = s.disk.percent >= 85;
+  const memWarn = s.memory.percent >= 85;
+  const cpuWarn = s.cpu.load1_pct >= 80;
+
+  return (
+    <div>
+      <h2 className="text-sm font-semibold text-slate-900 mb-2">Server health
+        <span className="ml-2 text-xs font-normal text-slate-400">Hetzner · refreshes every 15s</span>
+      </h2>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-white border border-slate-200 rounded-xl p-4">
+          <div className="text-xs text-slate-500">Uptime</div>
+          <div className="text-lg font-semibold text-slate-900 mt-0.5">{s.uptime_human}</div>
+        </div>
+        <div className={`bg-white border rounded-xl p-4 ${diskWarn ? "border-red-300" : "border-slate-200"}`}>
+          <div className="text-xs text-slate-500">Disk ({s.disk.percent}%)</div>
+          <div className={`text-lg font-semibold mt-0.5 ${diskWarn ? "text-red-600" : "text-slate-900"}`}>
+            {s.disk.free_gb} GB free
+          </div>
+          <UsageBar pct={s.disk.percent} />
+          <div className="text-xs text-slate-400 mt-1">{s.disk.used_gb} / {s.disk.total_gb} GB · DB {s.disk.db_size_mb} MB</div>
+        </div>
+        <div className={`bg-white border rounded-xl p-4 ${memWarn ? "border-red-300" : "border-slate-200"}`}>
+          <div className="text-xs text-slate-500">Memory ({s.memory.percent}%)</div>
+          <div className={`text-lg font-semibold mt-0.5 ${memWarn ? "text-red-600" : "text-slate-900"}`}>
+            {s.memory.available_mb.toLocaleString()} MB free
+          </div>
+          <UsageBar pct={s.memory.percent} />
+          <div className="text-xs text-slate-400 mt-1">{s.memory.used_mb.toLocaleString()} / {s.memory.total_mb.toLocaleString()} MB used</div>
+        </div>
+        <div className={`bg-white border rounded-xl p-4 ${cpuWarn ? "border-amber-300" : "border-slate-200"}`}>
+          <div className="text-xs text-slate-500">CPU load ({s.cpu.count} cores)</div>
+          <div className={`text-lg font-semibold mt-0.5 ${cpuWarn ? "text-amber-600" : "text-slate-900"}`}>
+            {s.cpu.load1_pct}%
+          </div>
+          <UsageBar pct={s.cpu.load1_pct} warn={70} crit={80} />
+          <div className="text-xs text-slate-400 mt-1">{s.cpu.load1} / {s.cpu.load5} / {s.cpu.load15} (1/5/15m)</div>
         </div>
       </div>
     </div>
