@@ -119,6 +119,9 @@ export default function BatchPage() {
       state: "pending",
     }));
     setResults(initialResults);
+    localStorage.setItem("ef_active_batch", JSON.stringify({
+      done: 0, total: valid.length, startedAt: startTimeRef.current,
+    }));
 
     const { baseUrl, apiKey, verifyProvider, zerobounceKey, reoonKey } = getConfig();
 
@@ -177,15 +180,20 @@ export default function BatchPage() {
               const avgPerContact = elapsed / done;
               const remaining = (p.total - done) * avgPerContact;
               setEta(done < p.total ? fmtSeconds(remaining) : null);
+              localStorage.setItem("ef_active_batch", JSON.stringify({
+                done, total: p.total, startedAt: startTimeRef.current,
+              }));
               return { ...p, done };
             });
           } else if (event.type === "done") {
             setLoading(false);
             setEta(null);
+            localStorage.removeItem("ef_active_batch");
           }
         }
       }
     } catch (e: unknown) {
+      localStorage.removeItem("ef_active_batch");
       if ((e as Error).name === "AbortError") return;
       setError(e instanceof Error ? e.message : "Request failed");
       setLoading(false);
