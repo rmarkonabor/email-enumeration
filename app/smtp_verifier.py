@@ -198,11 +198,27 @@ class SMTPVerifier:
                             response_message=last_error or "All MX hosts unreachable")
 
     async def is_catch_all(self, domain: str, source_ip: str | None = None) -> bool:
-        """Probe with a clearly-bogus address. If the server accepts it, catch-all."""
-        rnd = "".join(random.choices(string.ascii_lowercase + string.digits, k=24))
-        bogus = f"zzz_nope_{rnd}@{domain}"
-        result = await self.verify_email(bogus, source_ip=source_ip)
-        return result.status == "verified"
+        """Probe with two fake addresses to detect servers that accept everything.
+
+        Uses a realistic name-format probe (firstname.lastname style) so servers
+        that reject unusual formats (underscores, long strings) are still caught.
+        If either probe is accepted the domain is catch-all.
+        """
+        def _rnd_name(k: int) -> str:
+            return "".join(random.choices(string.ascii_lowercase, k=k))
+
+        probes = [
+            # Realistic firstname.lastname format — catches format-filtering servers
+            f"{_rnd_name(7)}.{_rnd_name(9)}@{domain}",
+            # Classic random string — catches servers that accept anything
+            f"zzz_nope_{''.join(random.choices(string.ascii_lowercase + string.digits, k=16))}@{domain}",
+        ]
+        for probe in probes:
+            result = await self.verify_email(probe, source_ip=source_ip)
+            if result.status == "verified":
+                logger.debug("Catch-all detected on %s via probe %s", domain, probe)
+                return True
+        return False
 
 
 __all__ = ["SMTPVerifier", "VerifyResult"]
