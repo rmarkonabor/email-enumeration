@@ -34,6 +34,8 @@ export default function ProviderPicker() {
   async function switchProvider(p: Provider) {
     setProvider(p);
     localStorage.setItem("ef_verify_provider", p);
+    // Notify same-tab listeners (storage event only fires cross-tab).
+    window.dispatchEvent(new CustomEvent("ef-provider-changed", { detail: p }));
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
       await supabase.from("profiles").update({ verify_provider: p }).eq("id", user.id);

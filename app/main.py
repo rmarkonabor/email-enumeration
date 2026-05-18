@@ -323,6 +323,7 @@ async def smtp_stats() -> dict:
         "volume_24h": metrics.today_volume(),
         "accuracy_30d": metrics.accuracy(days=30),
         "accuracy_7d": metrics.accuracy(days=7),
+        "pool_exhausted": warmup.is_pool_exhausted(),
     }
 
 

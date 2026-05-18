@@ -5,6 +5,7 @@ import Link from "next/link";
 import { addHistory, generateRunId, type FindRequest, type FindResponse } from "@/lib/api";
 import StatusBadge from "@/components/StatusBadge";
 import ProviderPicker from "@/components/ProviderPicker";
+import { usePoolStatus } from "@/lib/usePoolStatus";
 
 const SYNC_THRESHOLD = 25;
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "https://verify1.mailcheckhq.com";
@@ -297,6 +298,20 @@ export default function BatchPage() {
     a.click();
   }
 
+  const [provider, setProvider] = useState<string>("smtp");
+  useEffect(() => {
+    const read = () => setProvider(localStorage.getItem("ef_verify_provider") || "smtp");
+    read();
+    window.addEventListener("storage", read);
+    window.addEventListener("ef-provider-changed", read);
+    return () => {
+      window.removeEventListener("storage", read);
+      window.removeEventListener("ef-provider-changed", read);
+    };
+  }, []);
+  const { pool_exhausted } = usePoolStatus(provider);
+  const blocked = pool_exhausted && provider === "smtp";
+
   const validCount = rows.filter(r => r.first_name && r.last_name && r.domain).length;
   const doneResults = results.filter(r => r.state === "done");
   const totalCredits = doneResults.reduce((sum, r) => sum + (r.response.credits_used ?? 0), 0);
@@ -366,11 +381,17 @@ export default function BatchPage() {
               Stop
             </button>
           ) : (
-            <button onClick={handleRun} disabled={!validCount} className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition-colors">
+            <button onClick={handleRun} disabled={!validCount || blocked} className="px-6 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors">
               Run {validCount} contact{validCount !== 1 ? "s" : ""}
             </button>
           )}
         </div>
+
+        {blocked && (
+          <div className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            SMTP pool is at its daily cap. Lookups resume after 00:00 UTC, or switch to ZeroBounce / Reoon via the provider picker above.
+          </div>
+        )}
 
         {error && (
           <div className="mt-3 bg-red-50 border border-red-200 text-red-600 rounded-lg px-4 py-3 text-sm">{error}</div>
