@@ -208,10 +208,11 @@ class SMTPVerifier:
             return "".join(random.choices(string.ascii_lowercase, k=k))
 
         probes = [
-            # Realistic firstname.lastname format — catches format-filtering servers
-            f"{_rnd_name(7)}.{_rnd_name(9)}@{domain}",
-            # Classic random string — catches servers that accept anything
+            # Obvious fake first — fastest path for naive catch-all servers
             f"zzz_nope_{''.join(random.choices(string.ascii_lowercase + string.digits, k=16))}@{domain}",
+            # Realistic firstname.lastname format — catches servers that do format
+            # validation but still accept any real-looking address
+            f"{_rnd_name(7)}.{_rnd_name(9)}@{domain}",
         ]
         for probe in probes:
             result = await self.verify_email(probe, source_ip=source_ip)
