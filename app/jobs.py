@@ -548,7 +548,7 @@ class JobWorker:
                         middle_name=contact.get("middle_name"),
                         return_attempts=False,
                         provider=job["verify_provider"],
-                        provider_key=(job.get("zerobounce_api_key")
+                        provider_key=(job.get("zerobounce_api_key") or ""
                                       if job["verify_provider"] == "zerobounce"
                                       else job.get("reoon_api_key") or ""),
                         user_id=user_id,
