@@ -121,9 +121,13 @@ export default function DashboardPage() {
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async (r: Range) => {
+    const apiKey = localStorage.getItem("ef_api_key") || "";
+    if (!apiKey) {
+      setErr("No API key found. Go to Settings to load your key.");
+      return;
+    }
     setLoading(true);
     setErr(null);
-    const apiKey = localStorage.getItem("ef_api_key") || "";
     try {
       const res = await fetch(`${API_BASE}/stats?range=${r}`, {
         headers: { "X-API-Key": apiKey },
@@ -168,7 +172,12 @@ export default function DashboardPage() {
       </div>
 
       {err && (
-        <div className="bg-red-50 border border-red-200 text-red-600 rounded-xl px-4 py-3 text-sm">{err}</div>
+        <div className="bg-red-50 border border-red-200 text-red-600 rounded-xl px-4 py-3 text-sm flex items-center justify-between">
+          <span>{err}</span>
+          {err.includes("API key") && (
+            <a href="/settings" className="ml-4 underline font-medium whitespace-nowrap">Go to Settings →</a>
+          )}
+        </div>
       )}
 
       {loading && !stats && (

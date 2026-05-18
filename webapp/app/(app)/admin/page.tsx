@@ -75,22 +75,30 @@ export default function AdminSystemPage() {
 
   async function load() {
     const key = localStorage.getItem("ef_api_key") || "";
+    if (!key) { setErr("No API key found. Go to Settings to load your key."); return; }
     try {
       const [sysRes, srvRes] = await Promise.all([
         fetch(`${API_BASE}/admin/system`, { headers: { "X-API-Key": key } }),
         fetch(`${API_BASE}/admin/server`, { headers: { "X-API-Key": key } }),
       ]);
-      if (!sysRes.ok) { setErr(`HTTP ${sysRes.status}`); return; }
+      if (!sysRes.ok) { setErr(`HTTP ${sysRes.status} — check your API key has admin access`); return; }
       setData(await sysRes.json());
       if (srvRes.ok) {
         const d = await srvRes.json();
         setServers(d.servers ?? []);
       }
       setErr(null);
-    } catch (e: any) { setErr(e.message); }
+    } catch (e: any) { setErr(`Network error: ${e.message}. Check the server is reachable.`); }
   }
 
-  if (err) return <div className="text-red-600 text-sm">Error: {err}</div>;
+  if (err) return (
+    <div className="bg-red-50 border border-red-200 text-red-600 rounded-xl px-4 py-3 text-sm flex items-center justify-between">
+      <span>{err}</span>
+      {err.includes("API key") && (
+        <a href="/settings" className="ml-4 underline font-medium whitespace-nowrap">Go to Settings →</a>
+      )}
+    </div>
+  );
   if (!data) return <div className="text-slate-400 text-sm">Loading…</div>;
 
   const { warmup, volume_24h, pool_exhausted } = data;
