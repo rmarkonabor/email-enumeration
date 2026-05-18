@@ -339,6 +339,7 @@ async def smtp_stats() -> dict:
         "volume_24h": metrics.today_volume(),
         "accuracy_30d": metrics.accuracy(days=30),
         "accuracy_7d": metrics.accuracy(days=7),
+        "pool_exhausted": warmup.is_pool_exhausted(),
     }
 
 
@@ -399,6 +400,15 @@ def _check_smtp_pool(provider: str) -> None:
         )
 
 
+def _provider_key(provider: str, zerobounce_key: str, reoon_key: str) -> str:
+    """Return the API key for the active third-party provider, or empty for SMTP."""
+    if provider == "zerobounce":
+        return zerobounce_key
+    if provider == "reoon":
+        return reoon_key
+    return ""
+
+
 @app.post(
     "/find",
     response_model=FindResponse,
@@ -409,7 +419,6 @@ async def find(request: Request, req: FindRequest,
                ctx: UserContext = Depends(require_api_key)) -> FindResponse:
     _check_smtp_pool(req.verify_provider)
     finder: EmailFinder = app.state.finder
-    provider_key = req.zerobounce_api_key if req.verify_provider == "zerobounce" else (req.reoon_api_key if req.verify_provider == "reoon" else "")
     try:
         result = await finder.find(
             first_name=req.first_name,
@@ -418,7 +427,7 @@ async def find(request: Request, req: FindRequest,
             middle_name=req.middle_name,
             return_attempts=req.return_attempts,
             provider=req.verify_provider,
-            provider_key=provider_key,
+            provider_key=_provider_key(req.verify_provider, req.zerobounce_api_key, req.reoon_api_key),
             user_id=ctx.user_id,
         )
     except ValueError as e:
@@ -444,14 +453,14 @@ class StreamRequest(BaseModel):
 async def find_stream(request: Request, req: StreamRequest,
                        ctx: UserContext = Depends(require_api_key)) -> StreamingResponse:
     _check_smtp_pool(req.verify_provider)
-    provider_key = req.zerobounce_api_key if req.verify_provider == "zerobounce" else (req.reoon_api_key if req.verify_provider == "reoon" else "")
     finder: EmailFinder = app.state.finder
 
     async def event_gen():
         try:
             async for event in finder.find_stream(
                 req.first_name, req.last_name, req.domain, req.middle_name,
-                provider=req.verify_provider, provider_key=provider_key,
+                provider=req.verify_provider,
+                provider_key=_provider_key(req.verify_provider, req.zerobounce_api_key, req.reoon_api_key),
                 user_id=ctx.user_id,
             ):
                 yield f"data: {json.dumps(event)}\n\n"
@@ -496,14 +505,13 @@ async def find_batch_stream(request: Request, req: BatchRequest,
                 continue
             yield f"data: {json.dumps({'type': 'contact_start', 'index': i, 'name': f'{contact.first_name} {contact.last_name}', 'domain': contact.domain})}\n\n"
             try:
-                batch_provider_key = req.zerobounce_api_key if req.verify_provider == "zerobounce" else (req.reoon_api_key if req.verify_provider == "reoon" else "")
                 result = await finder.find(
                     first_name=contact.first_name,
                     last_name=contact.last_name,
                     domain=contact.domain,
                     middle_name=contact.middle_name,
                     provider=req.verify_provider,
-                    provider_key=batch_provider_key,
+                    provider_key=_provider_key(req.verify_provider, req.zerobounce_api_key, req.reoon_api_key),
                     user_id=ctx.user_id,
                 )
                 resp = _to_response(result, False)
@@ -575,6 +583,10 @@ def _estimate_eta_seconds(store: JobStore, warmup: Warmup, contacts_ahead: int) 
 @limiter.limit(RATE_LIMIT)
 async def find_batch(request: Request, req: BatchRequest,
                       ctx: UserContext = Depends(require_api_key)):
+    # Block all new SMTP submissions when the pool is exhausted — no point
+    # queuing work that can't run until UTC midnight. No-op for ZB/Reoon.
+    _check_smtp_pool(req.verify_provider)
+
     all_contacts = [c.model_dump() for c in req.contacts]
     valid_contacts = [c for c in all_contacts if _contact_valid(c)]
     skipped = len(all_contacts) - len(valid_contacts)
@@ -613,14 +625,7 @@ async def find_batch(request: Request, req: BatchRequest,
         )
 
     # --- Small batches: synchronous path ---
-    _check_smtp_pool(req.verify_provider)
     finder: EmailFinder = app.state.finder
-
-    _batch_provider_key = (
-        req.zerobounce_api_key if req.verify_provider == "zerobounce"
-        else req.reoon_api_key if req.verify_provider == "reoon"
-        else ""
-    )
 
     _skipped_response = FindResponse(
         email=None, status="skipped", catch_all=False, candidates_tried=0,
@@ -638,7 +643,7 @@ async def find_batch(request: Request, req: BatchRequest,
                 middle_name=contact.get("middle_name"),
                 return_attempts=False,
                 provider=req.verify_provider,
-                provider_key=_batch_provider_key,
+                provider_key=_provider_key(req.verify_provider, req.zerobounce_api_key, req.reoon_api_key),
                 user_id=ctx.user_id,
             )
             return _to_response(result, False)

@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { addHistory, generateRunId, type FindRequest, type FindResponse } from "@/lib/api";
 import ResultCard from "@/components/ResultCard";
 import ProviderPicker from "@/components/ProviderPicker";
+import { usePoolStatus } from "@/lib/usePoolStatus";
 
 type ProgressEvent =
   | { type: "status"; message: string }
@@ -39,6 +40,19 @@ export default function SinglePage() {
   const [result, setResult] = useState<FindResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
+  const [provider, setProvider] = useState<string>("smtp");
+  useEffect(() => {
+    const read = () => setProvider(localStorage.getItem("ef_verify_provider") || "smtp");
+    read();
+    window.addEventListener("storage", read);
+    window.addEventListener("ef-provider-changed", read);
+    return () => {
+      window.removeEventListener("storage", read);
+      window.removeEventListener("ef-provider-changed", read);
+    };
+  }, []);
+  const { pool_exhausted } = usePoolStatus(provider);
+  const blocked = pool_exhausted && provider === "smtp";
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -179,11 +193,16 @@ export default function SinglePage() {
         </div>
         <button
           type="submit"
-          disabled={loading}
-          className="w-full py-2.5 bg-blue-600 text-white rounded-lg font-semibold text-sm hover:bg-blue-700 disabled:opacity-50 transition-colors"
+          disabled={loading || blocked}
+          className="w-full py-2.5 bg-blue-600 text-white rounded-lg font-semibold text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           {loading ? "Searching…" : "Find email"}
         </button>
+        {blocked && (
+          <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            SMTP pool is at its daily cap. Lookups resume after 00:00 UTC, or switch to ZeroBounce / Reoon via the provider picker above.
+          </div>
+        )}
       </form>
 
       {error && (

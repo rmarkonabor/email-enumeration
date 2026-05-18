@@ -27,6 +27,7 @@ class FindResult:
     attempts: list[dict] = field(default_factory=list)
     mail_provider: str | None = None
     credits_used: int = 0
+    reason: str | None = None  # populated when status='throttled' to explain the block
 
 
 def _done_event(email, status, catch_all, attempts, fallback, mail_provider=None, credits_used=0) -> dict:
@@ -125,7 +126,8 @@ class EmailFinder:
                 return FindResult(email=None, status="throttled", catch_all=False,
                                   candidates_tried=0,
                                   attempts=[{"status": "throttled", "reason": block_reason}] if return_attempts else [],
-                                  mail_provider=mail_provider)
+                                  mail_provider=mail_provider,
+                                  reason=block_reason)
             t0 = time.perf_counter()
             catch_all = await self.verifier.is_catch_all(domain, source_ip=ca_ip)
             ca_latency = int((time.perf_counter() - t0) * 1000)
@@ -146,6 +148,7 @@ class EmailFinder:
         candidates = generate_permutations(first_name, last_name, domain, middle_name)
         attempts: list[dict] = []
         throttled = False
+        throttle_reason: str | None = None
 
         for candidate in candidates:
             cached = self.cache.get_verified(candidate)
@@ -166,6 +169,7 @@ class EmailFinder:
             if block_reason is not None:
                 attempts.append({"email": candidate, "status": "throttled", "reason": block_reason})
                 throttled = True
+                throttle_reason = block_reason
                 break
 
             t0 = time.perf_counter()
@@ -197,7 +201,8 @@ class EmailFinder:
                           catch_all=False,
                           candidates_tried=len(attempts),
                           attempts=attempts if return_attempts else [],
-                          mail_provider=mail_provider)
+                          mail_provider=mail_provider,
+                          reason=throttle_reason if throttled else None)
 
     # --------------------------------------------------------- Third-party
     async def _find_third_party(

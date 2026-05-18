@@ -31,6 +31,10 @@ from typing import Any, Callable, Awaitable
 logger = logging.getLogger(__name__)
 
 SYNC_THRESHOLD = 25  # contacts: at or below = stream synchronously; above = queue
+PER_CONTACT_TIMEOUT = 120.0  # seconds; caps any single contact so one bad MX can't freeze the worker
+SLOW_CONTACT_THRESHOLD_MS = 30_000  # log at WARNING when a contact exceeds this
+EARLY_FAIL_WINDOW = 10  # check the first N contacts of each job for systemic failure
+EARLY_FAIL_THRESHOLD = 10  # if all N are 'error' with the same message, fail the job
 ACTIVE_STATUSES = ("queued", "running")
 TERMINAL_STATUSES = ("done", "failed", "cancelled")
 
@@ -350,7 +354,7 @@ class JobStore:
 
     @staticmethod
     def _iso(ts: int | None) -> str | None:
-        if not ts:
+        if ts is None:
             return None
         return dt.datetime.fromtimestamp(ts, dt.timezone.utc).isoformat()
 
@@ -502,6 +506,10 @@ class JobWorker:
             self._rotation.append(user_id)
             self._consecutive_skips += 1
             if self._consecutive_skips >= max(1, len(self._rotation) + 1):
+                logger.warning(
+                    "SMTP pool exhausted; worker sleeping %.0fs (all configured IPs at cap or paused)",
+                    self.pool_exhausted_sleep,
+                )
                 # Sleep in 5s chunks so cancel requests are applied promptly.
                 slept = 0.0
                 while slept < self.pool_exhausted_sleep and not self._stopping:
@@ -530,18 +538,22 @@ class JobWorker:
                 "credits_used": 0,
             }
         else:
+            t0 = time.perf_counter()
             try:
-                result = await self.finder.find(
-                    first_name=contact["first_name"],
-                    last_name=contact["last_name"],
-                    domain=contact["domain"],
-                    middle_name=contact.get("middle_name"),
-                    return_attempts=False,
-                    provider=job["verify_provider"],
-                    provider_key=(job.get("zerobounce_api_key")
-                                  if job["verify_provider"] == "zerobounce"
-                                  else job.get("reoon_api_key") or ""),
-                    user_id=user_id,
+                result = await asyncio.wait_for(
+                    self.finder.find(
+                        first_name=contact["first_name"],
+                        last_name=contact["last_name"],
+                        domain=contact["domain"],
+                        middle_name=contact.get("middle_name"),
+                        return_attempts=False,
+                        provider=job["verify_provider"],
+                        provider_key=(job.get("zerobounce_api_key") or ""
+                                      if job["verify_provider"] == "zerobounce"
+                                      else job.get("reoon_api_key") or ""),
+                        user_id=user_id,
+                    ),
+                    timeout=PER_CONTACT_TIMEOUT,
                 )
                 response = {
                     "request": contact,
@@ -551,6 +563,21 @@ class JobWorker:
                     "candidates_tried": result.candidates_tried,
                     "mail_provider": result.mail_provider,
                     "credits_used": result.credits_used,
+                }
+                if getattr(result, "reason", None):
+                    response["reason"] = result.reason
+            except asyncio.TimeoutError:
+                logger.warning("Contact timed out after %.0fs (job=%s, domain=%s)",
+                               PER_CONTACT_TIMEOUT, job["id"], contact.get("domain"))
+                response = {
+                    "request": contact,
+                    "email": None,
+                    "status": "error",
+                    "catch_all": False,
+                    "candidates_tried": 0,
+                    "mail_provider": None,
+                    "credits_used": 0,
+                    "error": f"verification timed out after {int(PER_CONTACT_TIMEOUT)}s",
                 }
             except Exception as e:
                 logger.warning("Contact processing failed (job=%s): %s", job["id"], e)
@@ -564,6 +591,11 @@ class JobWorker:
                     "credits_used": 0,
                     "error": str(e)[:200],
                 }
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            log_fn = logger.warning if elapsed_ms >= SLOW_CONTACT_THRESHOLD_MS else logger.info
+            log_fn("contact done job=%s user=%s domain=%s status=%s reason=%s elapsed_ms=%d",
+                   job["id"], user_id, contact.get("domain"),
+                   response["status"], response.get("reason"), elapsed_ms)
 
         try:
             self.store.append_result(job["id"], response)
@@ -575,6 +607,28 @@ class JobWorker:
                             job["id"], job["done_count"], e)
             self.store.mark_failed(job["id"], f"DB write failed: {e}")
             return
+
+        # Early-fail circuit: if the first EARLY_FAIL_WINDOW contacts all
+        # returned 'error' with the same error string, the underlying issue
+        # (provider down, bad API key, network outage) won't fix itself for
+        # the remaining contacts. Fail fast so the user knows to retry.
+        new_done = job["done_count"] + 1
+        if new_done == EARLY_FAIL_WINDOW and new_done < job["total"]:
+            updated = self.store.get(job["id"])
+            if updated and updated["status"] == "running":
+                window = updated["results"][:EARLY_FAIL_WINDOW]
+                errors = [r.get("error", "") for r in window if r.get("status") == "error"]
+                if len(errors) >= EARLY_FAIL_THRESHOLD and len(set(errors)) == 1:
+                    err_msg = errors[0] or "unknown error"
+                    logger.warning(
+                        "Early-fail circuit tripped for job=%s: first %d contacts all errored with '%s'",
+                        job["id"], EARLY_FAIL_WINDOW, err_msg,
+                    )
+                    self.store.mark_failed(
+                        job["id"],
+                        f"aborted after {EARLY_FAIL_WINDOW} consecutive errors: {err_msg}",
+                    )
+                    return
 
         # Re-check job state after this contact
         updated = self.store.get(job["id"])
