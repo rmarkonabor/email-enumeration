@@ -303,6 +303,7 @@ class EmailFinder:
             yield _done_event(None, "skipped", False, [], True, mail_provider)
             return
 
+        candidates = generate_permutations(first_name, last_name, domain, middle_name)
         yield {"type": "candidates", "count": len(candidates)}
         attempts: list[dict] = []
         throttled = False
