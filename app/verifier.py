@@ -119,31 +119,26 @@ class EmailFinder:
         provider_bucket = classify_provider(mx_hosts)
         mail_provider = await self.verifier.detect_mail_provider(domain)
 
-        catch_all = self.cache.get_catch_all(domain)
-        if catch_all is None:
-            ca_ip, block_reason = self._pick_source_ip(domain)
-            if block_reason is not None:
-                return FindResult(email=None, status="throttled", catch_all=False,
-                                  candidates_tried=0,
-                                  attempts=[{"status": "throttled", "reason": block_reason}] if return_attempts else [],
-                                  mail_provider=mail_provider,
-                                  reason=block_reason)
-            t0 = time.perf_counter()
-            catch_all = await self.verifier.is_catch_all(domain, source_ip=ca_ip)
-            ca_latency = int((time.perf_counter() - t0) * 1000)
-            if self.warmup is not None:
-                self.warmup.record_attempt(None, domain, source_ip=ca_ip or "",
-                                            provider=provider_bucket, response_ms=ca_latency)
-            self.cache.set_catch_all(domain, catch_all)
-        if catch_all:
-            best_guess = generate_permutations(first_name, last_name, domain, middle_name)
-            best_email = best_guess[0] if best_guess else ""
+        ca_ip, block_reason = self._pick_source_ip(domain)
+        if block_reason is not None:
+            return FindResult(email=None, status="throttled", catch_all=False,
+                              candidates_tried=0,
+                              attempts=[{"status": "throttled", "reason": block_reason}] if return_attempts else [],
+                              mail_provider=mail_provider,
+                              reason=block_reason)
+        t0 = time.perf_counter()
+        spoofing = await self.verifier.is_catch_all(domain, source_ip=ca_ip)
+        ca_latency = int((time.perf_counter() - t0) * 1000)
+        if self.warmup is not None:
+            self.warmup.record_attempt(None, domain, source_ip=ca_ip or "",
+                                        provider=provider_bucket, response_ms=ca_latency)
+        if spoofing:
             if self.metrics is not None:
-                self.metrics.log_result("smtp", best_email, "catch_all", None, 0,
+                self.metrics.log_result("smtp", "", "skipped", None, 0,
                                         user_id=user_id, candidates_tried=0, credits_used=0)
-            return FindResult(email=best_email or None,
-                              status="catch_all", catch_all=True,
-                              candidates_tried=0, mail_provider=mail_provider)
+            return FindResult(email=None, status="skipped", catch_all=False,
+                              candidates_tried=0, mail_provider=mail_provider,
+                              reason="Server accepted a fake address — SMTP validation unreliable")
 
         candidates = generate_permutations(first_name, last_name, domain, middle_name)
         attempts: list[dict] = []
@@ -287,32 +282,25 @@ class EmailFinder:
         if mail_provider:
             yield {"type": "mail_provider", "mail_provider": mail_provider}
 
-        yield {"type": "status", "message": f"Checking catch-all for {domain}…"}
-        catch_all = self.cache.get_catch_all(domain)
-        cached_ca = catch_all is not None
-        if catch_all is None:
-            ca_ip, block_reason = self._pick_source_ip(domain)
-            if block_reason is not None:
-                yield {"type": "attempt", "status": "throttled", "reason": block_reason}
-                yield _done_event(None, "throttled", False, [], True, mail_provider)
-                return
-            t0 = time.perf_counter()
-            catch_all = await self.verifier.is_catch_all(domain, source_ip=ca_ip)
-            ca_latency = int((time.perf_counter() - t0) * 1000)
-            if self.warmup is not None:
-                self.warmup.record_attempt(None, domain, source_ip=ca_ip or "",
-                                            provider=provider_bucket, response_ms=ca_latency)
-            self.cache.set_catch_all(domain, catch_all)
-        yield {"type": "catch_all", "catch_all": catch_all, "cached": cached_ca}
-
-        candidates = generate_permutations(first_name, last_name, domain, middle_name)
-
-        if catch_all:
-            best_guess = candidates[0] if candidates else None
+        yield {"type": "status", "message": f"Probing {domain} for fake validation…"}
+        ca_ip, block_reason = self._pick_source_ip(domain)
+        if block_reason is not None:
+            yield {"type": "attempt", "status": "throttled", "reason": block_reason}
+            yield _done_event(None, "throttled", False, [], True, mail_provider)
+            return
+        t0 = time.perf_counter()
+        spoofing = await self.verifier.is_catch_all(domain, source_ip=ca_ip)
+        ca_latency = int((time.perf_counter() - t0) * 1000)
+        if self.warmup is not None:
+            self.warmup.record_attempt(None, domain, source_ip=ca_ip or "",
+                                        provider=provider_bucket, response_ms=ca_latency)
+        if spoofing:
             if self.metrics is not None:
-                self.metrics.log_result("smtp", best_guess or "", "catch_all", None, 0,
+                self.metrics.log_result("smtp", "", "skipped", None, 0,
                                         user_id=user_id, candidates_tried=0, credits_used=0)
-            yield _done_event(best_guess, "catch_all", True, [], True, mail_provider)
+            yield {"type": "attempt", "status": "skipped",
+                   "reason": "Server accepted a fake address — SMTP validation unreliable"}
+            yield _done_event(None, "skipped", False, [], True, mail_provider)
             return
 
         yield {"type": "candidates", "count": len(candidates)}
