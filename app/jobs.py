@@ -354,7 +354,7 @@ class JobStore:
 
     @staticmethod
     def _iso(ts: int | None) -> str | None:
-        if not ts:
+        if ts is None:
             return None
         return dt.datetime.fromtimestamp(ts, dt.timezone.utc).isoformat()
 

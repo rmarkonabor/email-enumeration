@@ -384,6 +384,15 @@ def _check_smtp_pool(provider: str) -> None:
         )
 
 
+def _provider_key(provider: str, zerobounce_key: str, reoon_key: str) -> str:
+    """Return the API key for the active third-party provider, or empty for SMTP."""
+    if provider == "zerobounce":
+        return zerobounce_key
+    if provider == "reoon":
+        return reoon_key
+    return ""
+
+
 @app.post(
     "/find",
     response_model=FindResponse,
@@ -394,7 +403,6 @@ async def find(request: Request, req: FindRequest,
                ctx: UserContext = Depends(require_api_key)) -> FindResponse:
     _check_smtp_pool(req.verify_provider)
     finder: EmailFinder = app.state.finder
-    provider_key = req.zerobounce_api_key if req.verify_provider == "zerobounce" else (req.reoon_api_key if req.verify_provider == "reoon" else "")
     try:
         result = await finder.find(
             first_name=req.first_name,
@@ -403,7 +411,7 @@ async def find(request: Request, req: FindRequest,
             middle_name=req.middle_name,
             return_attempts=req.return_attempts,
             provider=req.verify_provider,
-            provider_key=provider_key,
+            provider_key=_provider_key(req.verify_provider, req.zerobounce_api_key, req.reoon_api_key),
             user_id=ctx.user_id,
         )
     except ValueError as e:
@@ -429,14 +437,14 @@ class StreamRequest(BaseModel):
 async def find_stream(request: Request, req: StreamRequest,
                        ctx: UserContext = Depends(require_api_key)) -> StreamingResponse:
     _check_smtp_pool(req.verify_provider)
-    provider_key = req.zerobounce_api_key if req.verify_provider == "zerobounce" else (req.reoon_api_key if req.verify_provider == "reoon" else "")
     finder: EmailFinder = app.state.finder
 
     async def event_gen():
         try:
             async for event in finder.find_stream(
                 req.first_name, req.last_name, req.domain, req.middle_name,
-                provider=req.verify_provider, provider_key=provider_key,
+                provider=req.verify_provider,
+                provider_key=_provider_key(req.verify_provider, req.zerobounce_api_key, req.reoon_api_key),
                 user_id=ctx.user_id,
             ):
                 yield f"data: {json.dumps(event)}\n\n"
@@ -477,14 +485,13 @@ async def find_batch_stream(request: Request, req: BatchRequest,
         for i, contact in enumerate(req.contacts):
             yield f"data: {json.dumps({'type': 'contact_start', 'index': i, 'name': f'{contact.first_name} {contact.last_name}', 'domain': contact.domain})}\n\n"
             try:
-                batch_provider_key = req.zerobounce_api_key if req.verify_provider == "zerobounce" else (req.reoon_api_key if req.verify_provider == "reoon" else "")
                 result = await finder.find(
                     first_name=contact.first_name,
                     last_name=contact.last_name,
                     domain=contact.domain,
                     middle_name=contact.middle_name,
                     provider=req.verify_provider,
-                    provider_key=batch_provider_key,
+                    provider_key=_provider_key(req.verify_provider, req.zerobounce_api_key, req.reoon_api_key),
                     user_id=ctx.user_id,
                 )
                 resp = _to_response(result, False)
@@ -591,12 +598,6 @@ async def find_batch(request: Request, req: BatchRequest,
     # --- Small batches: existing synchronous path ---
     finder: EmailFinder = app.state.finder
 
-    _batch_provider_key = (
-        req.zerobounce_api_key if req.verify_provider == "zerobounce"
-        else req.reoon_api_key if req.verify_provider == "reoon"
-        else ""
-    )
-
     async def _one(contact: FindRequest) -> FindResponse:
         try:
             result = await finder.find(
@@ -606,7 +607,7 @@ async def find_batch(request: Request, req: BatchRequest,
                 middle_name=contact.middle_name,
                 return_attempts=contact.return_attempts,
                 provider=req.verify_provider,
-                provider_key=_batch_provider_key,
+                provider_key=_provider_key(req.verify_provider, req.zerobounce_api_key, req.reoon_api_key),
                 user_id=ctx.user_id,
             )
             return _to_response(result, contact.return_attempts)

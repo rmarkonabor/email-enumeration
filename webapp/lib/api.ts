@@ -8,7 +8,7 @@ export interface FindRequest {
 
 export interface FindResponse {
   email: string | null;
-  status: "verified" | "catch_all" | "not_found" | "error";
+  status: "verified" | "catch_all" | "not_found" | "error" | "throttled" | "skipped";
   catch_all: boolean;
   candidates_tried: number;
   attempts?: { email: string; status: string; code?: number; cached?: boolean }[];

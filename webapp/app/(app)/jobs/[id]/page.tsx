@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import StatusBadge from "@/components/StatusBadge";
-import { addHistory, generateRunId } from "@/lib/api";
+import { addHistory, generateRunId, type FindResponse } from "@/lib/api";
 
 const HISTORY_SYNCED_KEY = "ef_job_history_synced";
 
@@ -136,9 +136,7 @@ export default function JobDetailPage() {
               },
               {
                 email: r.email,
-                status: (["verified", "catch_all", "not_found", "error"].includes(r.status)
-                          ? r.status
-                          : "error") as "verified" | "catch_all" | "not_found" | "error",
+                status: r.status as FindResponse["status"],
                 catch_all: r.catch_all,
                 candidates_tried: r.candidates_tried,
                 mail_provider: r.mail_provider,
