@@ -137,34 +137,11 @@ export default function Home() {
     toastTimer.current = setTimeout(() => setToast(null), 2800);
   }, []);
 
-  /* ── speak: ElevenLabs with SpeechSynthesis fallback ── */
-  const speak = useCallback(async (text: string) => {
+  /* ── speak ── */
+  const speak = useCallback((text: string) => {
     if (!text) return;
     setIsSpeaking(true);
     const done = () => setIsSpeaking(false);
-
-    try {
-      const res = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      });
-      if (res.ok) {
-        const buf = await res.arrayBuffer();
-        const ctx = new AudioContext();
-        const decoded = await ctx.decodeAudioData(buf);
-        const src = ctx.createBufferSource();
-        src.buffer = decoded;
-        src.connect(ctx.destination);
-        src.onended = done;
-        src.start();
-        return;
-      }
-      // 503 = not configured, fall through silently
-      if (res.status !== 503) console.warn('TTS error', res.status);
-    } catch { /* network error, fall through */ }
-
-    // SpeechSynthesis fallback
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     u.lang = 'zh-CN';
