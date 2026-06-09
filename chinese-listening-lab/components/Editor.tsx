@@ -7,6 +7,7 @@ interface Props {
   initialCards: Card[];
   onSave: (cards: Card[]) => void;
   onCancel: () => void;
+  onUsage?: (u: { input_tokens: number; output_tokens: number }) => void;
 }
 
 export default function Editor({ initialCards, onSave, onCancel }: Props) {
@@ -38,7 +39,9 @@ export default function Editor({ initialCards, onSave, onCancel }: Props) {
         const d = await res.json().catch(() => ({}));
         throw new Error(d.error || `HTTP ${res.status}`);
       }
-      const map: Record<string, Card> = await res.json();
+      const d = await res.json();
+      const map: Record<string, Card> = d.map ?? d;
+      if (d.usage) onUsage?.(d.usage);
       let filled = 0;
       setRows(prev => prev.map(row => {
         const h = row.h.trim();

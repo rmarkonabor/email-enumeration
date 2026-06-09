@@ -71,6 +71,13 @@ export default function Home() {
   const [loadingSubMsg, setLoadingSubMsg] = useState('');
   const [isSpeaking, setIsSpeaking] = useState(false);
 
+  /* token cost tracking — $3/1M input, $15/1M output (claude-sonnet-4) */
+  const [sessionTokens, setSessionTokens] = useState({ input: 0, output: 0 });
+  function addUsage(u: { input_tokens: number; output_tokens: number }) {
+    setSessionTokens(prev => ({ input: prev.input + u.input_tokens, output: prev.output + u.output_tokens }));
+  }
+  const sessionCostUSD = (sessionTokens.input * 3 + sessionTokens.output * 15) / 1_000_000;
+
   /* stable refs so speak() doesn't need deps */
   const rateRef = useRef(rate);
   const allVoicesRef = useRef(allVoices);
@@ -248,7 +255,9 @@ export default function Home() {
               body: JSON.stringify({ text: chunks[i] }),
             });
             if (!res.ok) throw new Error('parse ' + res.status);
-            const c: Card[] = await res.json();
+            const d = await res.json();
+            const c: Card[] = d.cards ?? d; // backward compat
+            if (d.usage) addUsage(d.usage);
             all = all.concat(Array.isArray(c) ? c : []);
           }
         } catch {
@@ -324,7 +333,9 @@ export default function Home() {
         const d = await res.json().catch(() => ({}));
         throw new Error(d.error || `HTTP ${res.status}`);
       }
-      const gen: Card[] = await res.json();
+      const d = await res.json();
+      const gen: Card[] = d.cards ?? d;
+      if (d.usage) addUsage(d.usage);
       if (!gen.length) throw new Error('No sentences returned. Try again.');
 
       const L: Lesson = { id: GEN_ID, title: '✦ Practice sentences', createdAt: Date.now(), cards: gen };
@@ -458,6 +469,7 @@ export default function Home() {
           initialCards={cards}
           onSave={handleSaveCards}
           onCancel={() => { setMode('flash'); startFlash(cards); }}
+          onUsage={addUsage}
         />
       );
     }
@@ -625,6 +637,11 @@ export default function Home() {
   return (
     <>
       <div className="app">
+        {sessionTokens.input + sessionTokens.output > 0 && (
+          <div className="cost-badge" title={`${sessionTokens.input.toLocaleString()} input + ${sessionTokens.output.toLocaleString()} output tokens`}>
+            API cost: ${sessionCostUSD < 0.001 ? sessionCostUSD.toFixed(5) : sessionCostUSD.toFixed(4)}
+          </div>
+        )}
         <Sidebar
           lessons={lessons}
           currentId={currentId}

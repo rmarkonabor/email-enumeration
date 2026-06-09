@@ -404,6 +404,23 @@ select {
   padding: 0 4px;
 }
 
+/* ── cost badge ── */
+.cost-badge {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: rgba(36, 31, 24, .82);
+  color: rgba(244, 239, 228, .9);
+  font-family: var(--body);
+  font-size: 12.5px;
+  padding: 6px 13px;
+  border-radius: 20px;
+  z-index: 40;
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+  box-shadow: 0 2px 10px var(--shadow);
+}
+
 /* ── banner / toast ── */
 .banner {
   background: rgba(178, 59, 46, .1);
