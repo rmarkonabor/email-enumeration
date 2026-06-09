@@ -74,13 +74,15 @@ export async function POST(req: NextRequest) {
   const s = out.indexOf('['), e = out.lastIndexOf(']');
   if (s >= 0 && e >= 0) out = out.slice(s, e + 1);
   const arr = JSON.parse(out);
-  return NextResponse.json(
-    (Array.isArray(arr) ? arr : [])
-      .map((c: { h?: string; p?: string; e?: string }) => ({
-        h: String(c.h ?? '').trim(),
-        p: String(c.p ?? '').trim(),
-        e: String(c.e ?? '').trim(),
-      }))
-      .filter((c: { h: string }) => c.h && onlyKnownChars(c.h, vocabChars))
-  );
+  const cards = (Array.isArray(arr) ? arr : [])
+    .map((c: { h?: string; p?: string; e?: string }) => ({
+      h: String(c.h ?? '').trim(),
+      p: String(c.p ?? '').trim(),
+      e: String(c.e ?? '').trim(),
+    }))
+    .filter((c: { h: string }) => c.h && onlyKnownChars(c.h, vocabChars));
+  return NextResponse.json({
+    cards,
+    usage: { input_tokens: data.usage?.input_tokens ?? 0, output_tokens: data.usage?.output_tokens ?? 0 },
+  });
 }

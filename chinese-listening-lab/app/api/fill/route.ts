@@ -41,10 +41,12 @@ export async function POST(req: NextRequest) {
   if (s >= 0 && e >= 0) out = out.slice(s, e + 1);
   const arr = JSON.parse(out);
 
-  // Return a map keyed by hanzi for easy client-side lookup
   const map: Record<string, { h: string; p: string; e: string }> = {};
   (Array.isArray(arr) ? arr : []).forEach((c: { h?: string; p?: string; e?: string }) => {
     if (c?.h) map[String(c.h).trim()] = { h: String(c.h).trim(), p: String(c.p ?? '').trim(), e: String(c.e ?? '').trim() };
   });
-  return NextResponse.json(map);
+  return NextResponse.json({
+    map,
+    usage: { input_tokens: data.usage?.input_tokens ?? 0, output_tokens: data.usage?.output_tokens ?? 0 },
+  });
 }
