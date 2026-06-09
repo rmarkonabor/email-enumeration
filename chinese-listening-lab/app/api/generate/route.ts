@@ -5,16 +5,36 @@ You are given the student's EXACT known vocabulary — every word they have stud
 Generate 12 short Mandarin sentences using ONLY the characters from that vocabulary list.
 STRICT RULES:
 - Use ONLY the Chinese characters that appear in the provided vocabulary list.
-- You may also use these essential grammar particles even if not listed: 的 了 吗 吧 呢 啊 呀 哦 嗯 嘛 哈
-- Do NOT introduce ANY other characters, words, or vocabulary not in the list.
-- Keep sentences short and beginner-level; vary patterns (statements, 吗/吧 questions, 喜欢, 是, time with 点, etc.)
+- You may also freely use these essential grammar words even if not in the list: 的 了 吗 吧 呢 啊 呀 哦 嗯 嘛 哈 不 没 很 太 也 都 还 就 才 和 跟 或 在 有 是 个 们 这 那 什么 哪 谁 怎么 为什么 一 两
+- Do NOT introduce any other vocabulary not in the list.
+- Keep sentences short and beginner-level; vary patterns (statements, 吗/吧 questions, negation with 不/没, degree with 很/太, etc.)
 - Each sentence must be grammatical and natural.
 For each sentence give the Chinese characters, accurate Hanyu Pinyin with tone marks, and a natural English translation.
 Respond with ONLY a minified JSON array, no markdown, no commentary. Schema: [{"h":"汉字","p":"pinyin","e":"English"}]`;
 
-// Characters always allowed regardless of vocab list (pure grammar particles)
-const ALWAYS_ALLOWED = new Set(['的','了','吗','吧','呢','啊','呀','哦','嗯','嘛','哈',
-  '，','。','？','！','、','：','…',' ','　','\n']);
+// Characters always allowed regardless of vocab list — grammar particles + essential function words
+const ALWAYS_ALLOWED = new Set([
+  // sentence-final / modal particles
+  '的','了','吗','吧','呢','啊','呀','哦','嗯','嘛','哈',
+  // negation
+  '不','没',
+  // degree adverbs
+  '很','太','真','非',
+  // common adverbs
+  '也','都','还','就','才','再','又',
+  // conjunctions
+  '和','跟','或',
+  // verbs needed for structure
+  '在','有','是',
+  // demonstratives & question words
+  '这','那','什','么','哪','谁','怎','为',
+  // grammatical suffixes / measure words
+  '个','们','子','儿',
+  // small numbers often used structurally
+  '一','两',
+  // punctuation
+  '，','。','？','！','、','：','…',' ','　','\n',
+]);
 
 function buildVocabCharSet(vocab: string): Set<string> {
   const s = new Set<string>();
