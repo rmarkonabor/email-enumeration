@@ -388,6 +388,15 @@ def check_quota(
     )
 
 
+def _provider_key_for_job(job: dict) -> str:
+    p = job.get("verify_provider", "smtp")
+    if p == "zerobounce":
+        return job.get("zerobounce_api_key") or ""
+    if p == "reoon":
+        return job.get("reoon_api_key") or ""
+    return ""
+
+
 class JobWorker:
     """Single-coroutine background worker. Round-robins one contact at a time
     across users with active jobs so big jobs don't starve small ones.
@@ -548,9 +557,7 @@ class JobWorker:
                         middle_name=contact.get("middle_name"),
                         return_attempts=False,
                         provider=job["verify_provider"],
-                        provider_key=(job.get("zerobounce_api_key") or ""
-                                      if job["verify_provider"] == "zerobounce"
-                                      else job.get("reoon_api_key") or ""),
+                        provider_key=(_provider_key_for_job(job)),
                         user_id=user_id,
                     ),
                     timeout=PER_CONTACT_TIMEOUT,

@@ -37,6 +37,8 @@ def _done_event(email, status, catch_all, attempts, fallback, mail_provider=None
         message = "Domain is catch-all; cannot confirm via SMTP."
     elif status == "throttled":
         message = "SMTP rate limit hit before verification could complete. Retry later or use a third-party provider."
+    elif status == "skipped":
+        message = "Server accepted a fake probe address — SMTP validation unreliable for this domain."
     else:
         message = "No candidate verified. Consider a paid enrichment tool."
     return {
@@ -170,7 +172,8 @@ class EmailFinder:
             t0 = time.perf_counter()
             result = await self.verifier.verify_email(candidate, source_ip=source_ip)
             response_ms = int((time.perf_counter() - t0) * 1000)
-            self.cache.set_verified(candidate, result.status)
+            if result.status != "unknown":
+                self.cache.set_verified(candidate, result.status)
             if self.warmup is not None:
                 self.warmup.record_attempt(result.response_code, domain, source_ip=source_ip or "",
                                             provider=provider_bucket, response_ms=response_ms)
@@ -239,7 +242,7 @@ class EmailFinder:
                     self.metrics.log_result(provider, candidate, "catch_all", None, response_ms,
                                             user_id=user_id, candidates_tried=len(attempts),
                                             credits_used=credits_used)
-                return FindResult(email=candidates[0] if candidates else None,
+                return FindResult(email=None,
                                   status="catch_all", catch_all=True,
                                   candidates_tried=len(attempts),
                                   attempts=attempts if return_attempts else [],
@@ -337,7 +340,8 @@ class EmailFinder:
             t0 = time.perf_counter()
             result = await self.verifier.verify_email(candidate, source_ip=source_ip)
             response_ms = int((time.perf_counter() - t0) * 1000)
-            self.cache.set_verified(candidate, result.status)
+            if result.status != "unknown":
+                self.cache.set_verified(candidate, result.status)
             if self.warmup is not None:
                 self.warmup.record_attempt(result.response_code, domain, source_ip=source_ip or "",
                                             provider=provider_bucket, response_ms=response_ms)
@@ -408,7 +412,7 @@ class EmailFinder:
                     self.metrics.log_result(provider, candidate, "catch_all", None, response_ms,
                                             user_id=user_id, candidates_tried=len(attempts),
                                             credits_used=credits_used)
-                yield _done_event(candidates[0] if candidates else None, "catch_all", True, attempts, True, mail_provider, credits_used)
+                yield _done_event(None, "catch_all", True, attempts, True, mail_provider, credits_used)
                 return
 
         if self.metrics is not None:

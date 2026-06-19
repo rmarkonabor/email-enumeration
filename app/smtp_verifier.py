@@ -81,6 +81,11 @@ class SMTPVerifier:
             logger.warning("MX lookup failed for %s: %s", domain, e)
 
         self._mx_cache[domain] = hosts
+        if len(self._mx_cache) > 10_000:
+            # Evict oldest half
+            keys = list(self._mx_cache)[:5_000]
+            for k in keys:
+                del self._mx_cache[k]
         return hosts
 
     async def detect_mail_provider(self, domain: str) -> str | None:
@@ -187,10 +192,14 @@ class SMTPVerifier:
             if 200 <= code < 300:
                 return VerifyResult(email=email, status="verified",
                                     response_code=code, response_message=msg)
-            if code in (550, 551, 553, 554):
+            if code in (550, 551, 552, 553, 554, 555):
                 return VerifyResult(email=email, status="not_found",
                                     response_code=code, response_message=msg)
-            # 4xx (greylist / rate limit) and other 5xx -> unknown
+            if 400 <= code < 500:
+                # Temporary error — try next MX host
+                last_error = f"Temporary error {code}: {msg}"
+                continue
+            # Other 5xx -> unknown
             return VerifyResult(email=email, status="unknown",
                                 response_code=code, response_message=msg)
 
