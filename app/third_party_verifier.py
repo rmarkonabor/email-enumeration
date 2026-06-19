@@ -21,14 +21,25 @@ async def verify_zerobounce(email: str, api_key: str) -> tuple[str, bool]:
                 timeout=15,
             )
             r.raise_for_status()
-            status = r.json().get("status", "").lower()
+            data = r.json()
+        status = (data.get("status") or "").lower()
+        sub_status = (data.get("sub_status") or "").lower()
+        logger.info("ZeroBounce %s -> status=%s sub_status=%s", email, status, sub_status)
+
         if status == "valid":
+            # Treat as unconfirmed if ZeroBounce flags sub-statuses that indicate
+            # the address may not reliably receive mail despite being "valid"
+            if sub_status in ("possible_trap", "role_based", "does_not_accept_mail",
+                               "role_based_catch_all", "mailbox_quota_exceeded"):
+                logger.warning("ZeroBounce %s: valid but sub_status=%s — returning not_found", email, sub_status)
+                return "not_found", True
             return "verified", True
         if status in ("invalid", "do_not_mail", "spamtrap", "abuse"):
             return "not_found", True
         if status == "catch-all":
             return "catch_all", True
-        return "unknown", True
+        # unknown — ZeroBounce does not charge credits for unknown results
+        return "unknown", False
     except Exception as e:
         logger.warning("ZeroBounce error for %s: %s", email, e)
         return "unknown", False
